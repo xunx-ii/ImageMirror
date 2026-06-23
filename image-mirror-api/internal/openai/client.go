@@ -64,7 +64,7 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest, references
 		return nil, err
 	}
 	apiKey = strings.TrimSpace(apiKey)
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	baseURL = normalizeBaseURL(baseURL)
 	if apiKey == "" {
 		return nil, errors.New("openai api key is not configured")
 	}
@@ -89,6 +89,11 @@ func (c *Client) generateImage(ctx context.Context, baseURL string, apiKey strin
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	return c.doImageRequest(ctx, httpReq)
+}
+
+func normalizeBaseURL(value string) string {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	return strings.TrimSuffix(value, "/v1")
 }
 
 func (c *Client) editImage(ctx context.Context, baseURL string, apiKey string, req ImageRequest, references []ReferenceImage) ([]byte, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,7 +76,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 	paymentSvc := payments.NewService(db, systemConfigSvc, cfg.PublicBaseURL)
 	redemptionSvc := redemptions.NewService(db)
 	contentSvc := content.NewService(db, storageSvc)
-	queueClient := queue.NewClient(redisOpt)
+	queueClient := queue.NewClient(redisOpt, cfg.OpenAITimeout+time.Minute)
 	adminSvc := admin.NewService(db, usersRepo, billingSvc)
 
 	services := httpapi.Services{

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Check, Download, GalleryHorizontalEnd, RefreshCw, Trash2 } from "lucide-react"
+import { Check, Download, Eye, GalleryHorizontalEnd, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
@@ -8,6 +8,7 @@ import { SecureImage } from "@/components/secure-image"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -17,6 +18,7 @@ import type { ImageGeneration } from "@/types"
 export function GalleryPage() {
   const [images, setImages] = useState<ImageGeneration[]>([])
   const [selected, setSelected] = useState<string[]>([])
+  const [detail, setDetail] = useState<ImageGeneration | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -62,6 +64,7 @@ export function GalleryPage() {
       await api.post("/api/images/bulk-delete", { ids })
       toast.success(`已删除 ${ids.length} 张图片`)
       setSelected((state) => state.filter((id) => !ids.includes(id)))
+      setDetail((state) => (state && ids.includes(state.id) ? null : state))
       await load()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -157,7 +160,11 @@ export function GalleryPage() {
                     </div>
                     <div className="text-xs text-muted-foreground">创建 {formatDate(image.createdAt)}</div>
                     <div className="text-xs text-muted-foreground">过期 {expiresIn(image.expiresAt)}</div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
+                      <Button variant="outline" onClick={() => setDetail(image)}>
+                        <Eye data-icon="inline-start" />
+                        详情
+                      </Button>
                       <Button variant="outline" disabled={image.status !== "COMPLETED"} onClick={() => void downloadImage(image.id)}>
                         <Download data-icon="inline-start" />
                         下载
@@ -174,6 +181,62 @@ export function GalleryPage() {
           })}
         </div>
       )}
+
+      <Dialog open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>图片详情</DialogTitle>
+          </DialogHeader>
+          {detail && (
+            <div className="flex max-h-[70vh] flex-col gap-4 overflow-auto">
+              {detail.status === "COMPLETED" && (
+                <SecureImage imageId={detail.id} alt={detail.prompt} className="max-h-[420px] w-full rounded-lg object-contain" />
+              )}
+              <div className="grid gap-3 text-sm sm:grid-cols-2">
+                <DetailItem label="状态" value={detail.status} />
+                <DetailItem label="积分" value={`${detail.creditsCost} credits`} />
+                <DetailItem label="模型" value={detail.model} />
+                <DetailItem label="尺寸" value={detail.size} />
+                <DetailItem label="质量" value={detail.quality} />
+                <DetailItem label="参考图" value={`${detail.referenceCount}`} />
+                <DetailItem label="创建时间" value={formatDate(detail.createdAt)} />
+                <DetailItem label="更新时间" value={formatDate(detail.updatedAt)} />
+                <DetailItem label="过期时间" value={formatDate(detail.expiresAt)} />
+                <DetailItem label="任务 ID" value={detail.id} />
+              </div>
+              <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm">
+                <div className="font-medium">提示词</div>
+                <div className="whitespace-pre-wrap text-muted-foreground">{detail.prompt}</div>
+              </div>
+              {detail.status === "FAILED" && (
+                <div className="flex flex-col gap-2 rounded-lg border p-3 text-sm">
+                  <div className="font-medium">失败原因</div>
+                  <div className="whitespace-pre-wrap text-muted-foreground">{detail.errorMessage || "暂无失败原因"}</div>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" disabled={detail.status !== "COMPLETED"} onClick={() => void downloadImage(detail.id)}>
+                  <Download data-icon="inline-start" />
+                  下载
+                </Button>
+                <Button variant="outline" disabled={busy} onClick={() => void deleteImages([detail.id])}>
+                  <Trash2 data-icon="inline-start" />
+                  删除
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
+  )
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1 rounded-lg border p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="truncate font-medium">{value}</div>
+    </div>
   )
 }

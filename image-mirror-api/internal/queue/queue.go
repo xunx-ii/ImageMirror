@@ -21,11 +21,15 @@ type ImageGeneratePayload struct {
 }
 
 type Client struct {
-	client *asynq.Client
+	client          *asynq.Client
+	generateTimeout time.Duration
 }
 
-func NewClient(redis asynq.RedisClientOpt) *Client {
-	return &Client{client: asynq.NewClient(redis)}
+func NewClient(redis asynq.RedisClientOpt, generateTimeout time.Duration) *Client {
+	if generateTimeout <= 0 {
+		generateTimeout = 11 * time.Minute
+	}
+	return &Client{client: asynq.NewClient(redis), generateTimeout: generateTimeout}
 }
 
 func (c *Client) Close() error {
@@ -37,7 +41,7 @@ func (c *Client) EnqueueGenerate(ctx context.Context, imageID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.client.EnqueueContext(ctx, asynq.NewTask(TypeImageGenerate, payload), asynq.Queue("image-generation"), asynq.Timeout(6*time.Minute), asynq.MaxRetry(2))
+	_, err = c.client.EnqueueContext(ctx, asynq.NewTask(TypeImageGenerate, payload), asynq.Queue("image-generation"), asynq.Timeout(c.generateTimeout), asynq.MaxRetry(2))
 	return err
 }
 
@@ -70,6 +74,13 @@ func (p *Processor) handleCleanup(ctx context.Context, _ *asynq.Task) error {
 	count, err := p.images.ExpireOld(ctx, 100)
 	if err == nil {
 		p.logger.Info("cleanup completed", "expired", count)
+	}
+	recovered, recoverErr := p.images.RecoverStaleProcessing(ctx, 100)
+	if recoverErr == nil && recovered > 0 {
+		p.logger.Warn("stale image generations recovered", "count", recovered)
+	}
+	if err == nil {
+		err = recoverErr
 	}
 	return err
 }

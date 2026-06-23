@@ -25,6 +25,11 @@ func main() {
 	if err := database.Migrate(ctx, container.DB, "db/migrations"); err != nil {
 		log.Fatal(err)
 	}
+	if recovered, err := container.Services.Images.RecoverStaleProcessing(ctx, 100); err != nil {
+		log.Fatal(err)
+	} else if recovered > 0 {
+		container.Logger.Warn("stale image generations recovered", "count", recovered)
+	}
 	scheduler, err := queue.StartScheduler(container.RedisOpt, container.Logger)
 	if err != nil {
 		log.Fatal(err)

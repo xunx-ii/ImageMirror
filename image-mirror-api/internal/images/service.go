@@ -164,7 +164,7 @@ func (s *Service) SaveReferenceFiles(ctx context.Context, userID string, imageID
 		cleanup()
 		return nil, err
 	}
-	tag, err := s.db.Exec(ctx, `
+	updateTag, err := s.db.Exec(ctx, `
 		UPDATE image_generations
 		SET reference_keys=$2::jsonb, updated_at=now()
 		WHERE id=$1 AND user_id=$3 AND status='PENDING'
@@ -173,7 +173,7 @@ func (s *Service) SaveReferenceFiles(ctx context.Context, userID string, imageID
 		cleanup()
 		return nil, err
 	}
-	if tag.RowsAffected() == 0 {
+	if updateTag.RowsAffected() == 0 {
 		cleanup()
 		return nil, errors.New("image generation is not available for reference images")
 	}
@@ -188,11 +188,11 @@ func (s *Service) Process(ctx context.Context, imageID string) error {
 	if gen.Status != "PENDING" {
 		return nil
 	}
-	tag, err := s.db.Exec(ctx, `UPDATE image_generations SET status='PROCESSING', updated_at=now(), error_message=NULL WHERE id=$1 AND status='PENDING'`, imageID)
+	processingTag, err := s.db.Exec(ctx, `UPDATE image_generations SET status='PROCESSING', updated_at=now(), error_message=NULL WHERE id=$1 AND status='PENDING'`, imageID)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if processingTag.RowsAffected() == 0 {
 		return nil
 	}
 
@@ -200,10 +200,7 @@ func (s *Service) Process(ctx context.Context, imageID string) error {
 	for _, key := range gen.ReferenceKeys {
 		data, err := s.storage.ReadImage(ctx, key)
 		if err != nil {
-			msg := err.Error()
-			_, _ = s.db.Exec(ctx, `UPDATE image_generations SET status='FAILED', error_message=$2, updated_at=now() WHERE id=$1`, imageID, msg)
-			_ = s.billing.Refund(ctx, gen.UserID, gen.CreditsCost, "reference image read failed", gen.ID)
-			s.deleteReferenceImages(ctx, gen.ReferenceKeys)
+			s.failGeneration(gen, err.Error(), "reference image read failed")
 			return nil
 		}
 		references = append(references, openai.ReferenceImage{
@@ -220,32 +217,67 @@ func (s *Service) Process(ctx context.Context, imageID string) error {
 		N:       1,
 	}, references)
 	if err != nil {
-		msg := err.Error()
-		_, _ = s.db.Exec(ctx, `UPDATE image_generations SET status='FAILED', error_message=$2, updated_at=now() WHERE id=$1`, imageID, msg)
-		_ = s.billing.Refund(ctx, gen.UserID, gen.CreditsCost, "image generation failed", gen.ID)
-		s.deleteReferenceImages(ctx, gen.ReferenceKeys)
+		s.failGeneration(gen, err.Error(), "image generation failed")
 		return nil
 	}
 
 	key, err := s.storage.SaveImage(ctx, gen.UserID, gen.ID, bytes)
 	if err != nil {
-		msg := err.Error()
-		_, _ = s.db.Exec(ctx, `UPDATE image_generations SET status='FAILED', error_message=$2, updated_at=now() WHERE id=$1`, imageID, msg)
-		_ = s.billing.Refund(ctx, gen.UserID, gen.CreditsCost, "image storage failed", gen.ID)
-		s.deleteReferenceImages(ctx, gen.ReferenceKeys)
+		s.failGeneration(gen, err.Error(), "image storage failed")
 		return nil
 	}
 	storageURL := "/api/images/" + gen.ID + "/file"
 	if gen.APIKeyID != nil {
 		storageURL = "/v1/images/" + gen.ID + "/file"
 	}
-	_, err = s.db.Exec(ctx, `
+	completedTag, err := s.db.Exec(ctx, `
 		UPDATE image_generations
 		SET status='COMPLETED', storage_key=$2, storage_url=$3, updated_at=now()
-		WHERE id=$1
+		WHERE id=$1 AND status='PROCESSING'
 	`, imageID, key, storageURL)
+	if err != nil {
+		return err
+	}
+	if completedTag.RowsAffected() == 0 {
+		_ = s.storage.DeleteImage(ctx, key)
+		s.deleteReferenceImages(ctx, gen.ReferenceKeys)
+		return nil
+	}
 	s.deleteReferenceImages(ctx, gen.ReferenceKeys)
-	return err
+	return nil
+}
+
+func (s *Service) RecoverStaleProcessing(ctx context.Context, limit int32) (int, error) {
+	timeout := s.cfg.OpenAITimeout + time.Minute
+	if timeout <= time.Minute {
+		timeout = 11 * time.Minute
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT id, user_id, api_key_id, model, prompt, size, quality, status, storage_key, storage_url, reference_keys, credits_cost, error_message, expires_at, deleted_at, created_at, updated_at
+		FROM image_generations
+		WHERE status='PROCESSING' AND updated_at < $1
+		ORDER BY updated_at ASC
+		LIMIT $2
+	`, time.Now().Add(-timeout), limit)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	items := make([]Generation, 0)
+	for rows.Next() {
+		var gen Generation
+		if err := scanGeneration(rows, &gen); err != nil {
+			return 0, err
+		}
+		items = append(items, gen)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, gen := range items {
+		s.failGeneration(gen, "image generation interrupted or timed out", "image generation interrupted")
+	}
+	return len(items), nil
 }
 
 func (s *Service) CancelPending(ctx context.Context, imageID string, reason string) error {
@@ -495,5 +527,19 @@ func scanGeneration(row pgx.Row, gen *Generation) error {
 func (s *Service) deleteReferenceImages(ctx context.Context, keys []string) {
 	for _, key := range keys {
 		_ = s.storage.DeleteImage(ctx, key)
+	}
+}
+
+func (s *Service) failGeneration(gen Generation, message string, refundDescription string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tag, _ := s.db.Exec(ctx, `
+		UPDATE image_generations
+		SET status='FAILED', error_message=$2, updated_at=now()
+		WHERE id=$1 AND status IN ('PENDING', 'PROCESSING')
+	`, gen.ID, message)
+	if tag.RowsAffected() > 0 {
+		_ = s.billing.Refund(ctx, gen.UserID, gen.CreditsCost, refundDescription, gen.ID)
+		s.deleteReferenceImages(ctx, gen.ReferenceKeys)
 	}
 }

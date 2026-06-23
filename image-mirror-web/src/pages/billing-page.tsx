@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -23,6 +24,7 @@ export function BillingPage() {
   const [redeemCode, setRedeemCode] = useState("")
   const [transactions, setTransactions] = useState<CreditTransaction[]>([])
   const [redemptions, setRedemptions] = useState<RedemptionHistoryItem[]>([])
+  const [redemptionOpen, setRedemptionOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [redeeming, setRedeeming] = useState(false)
 
@@ -93,38 +95,46 @@ export function BillingPage() {
       <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
         <div className="flex flex-col gap-4">
           <Card>
-          <CardHeader>
-            <CardTitle>在线充值</CardTitle>
-            <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-5" onSubmit={createPayment}>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="amount">充值金额</FieldLabel>
-                  <Input
-                    id="amount"
-                    type="number"
-                    min={1}
-                    value={amount}
-                    onChange={(event) => setAmount(Number(event.target.value))}
-                    required
-                  />
-                  <FieldDescription>提交后会跳转到易支付，到账积分按后台配置兑换。</FieldDescription>
-                </Field>
-              </FieldGroup>
-              <Button disabled={loading} type="submit">
-                <BadgeCent data-icon="inline-start" />
-                {loading ? "创建订单中" : "去支付"}
-              </Button>
-            </form>
-          </CardContent>
+            <CardHeader>
+              <CardTitle>在线充值</CardTitle>
+              <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-5" onSubmit={createPayment}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="amount">充值金额（人民币）</FieldLabel>
+                    <Input
+                      id="amount"
+                      type="number"
+                      min={1}
+                      value={amount}
+                      onChange={(event) => setAmount(Number(event.target.value))}
+                      required
+                    />
+                    <FieldDescription>单位：人民币元。提交后会跳转到易支付，到账积分按后台配置兑换。</FieldDescription>
+                  </Field>
+                </FieldGroup>
+                <Button disabled={loading} type="submit">
+                  <BadgeCent data-icon="inline-start" />
+                  {loading ? "创建订单中" : "去支付"}
+                </Button>
+              </form>
+            </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>兑换码</CardTitle>
-              <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle>兑换码</CardTitle>
+                  <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
+                </div>
+                <Button variant="outline" onClick={() => setRedemptionOpen(true)}>
+                  <Gift data-icon="inline-start" />
+                  兑换记录
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <form className="flex flex-col gap-5" onSubmit={redeem}>
@@ -145,44 +155,6 @@ export function BillingPage() {
         </div>
 
         <div className="flex flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>兑换记录</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {redemptions.length === 0 ? (
-                <Empty>
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <Gift />
-                    </EmptyMedia>
-                    <EmptyTitle>暂无兑换</EmptyTitle>
-                    <EmptyDescription>兑换码使用记录会显示在这里。</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>兑换码</TableHead>
-                      <TableHead>积分</TableHead>
-                      <TableHead>时间</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {redemptions.map((item) => (
-                      <TableRow key={`${item.code}-${item.redeemedAt}`}>
-                        <TableCell className="font-mono text-xs">{item.code}</TableCell>
-                        <TableCell className="tabular-nums">{item.credits}</TableCell>
-                        <TableCell>{formatDate(item.redeemedAt)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-
           <Card>
             <CardHeader>
               <CardTitle>交易记录</CardTitle>
@@ -228,6 +200,46 @@ export function BillingPage() {
           </Card>
         </div>
       </div>
+
+      <Dialog open={redemptionOpen} onOpenChange={setRedemptionOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>兑换记录</DialogTitle>
+          </DialogHeader>
+          {redemptions.length === 0 ? (
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Gift />
+                </EmptyMedia>
+                <EmptyTitle>暂无兑换</EmptyTitle>
+                <EmptyDescription>兑换码使用记录会显示在这里。</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <div className="max-h-[60vh] overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>兑换码</TableHead>
+                    <TableHead>积分</TableHead>
+                    <TableHead>时间</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {redemptions.map((item) => (
+                    <TableRow key={`${item.code}-${item.redeemedAt}`}>
+                      <TableCell className="font-mono text-xs">{item.code}</TableCell>
+                      <TableCell className="tabular-nums">{item.credits}</TableCell>
+                      <TableCell>{formatDate(item.redeemedAt)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
