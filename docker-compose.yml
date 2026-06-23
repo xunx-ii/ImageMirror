@@ -72,7 +72,7 @@ services:
       DATABASE_URL: postgres://imagemirror:imagemirror@postgres:5432/imagemirror?sslmode=disable
       REDIS_ADDR: redis:6379
       STORAGE_ROOT: /data/images
-      PUBLIC_BASE_URL: http://localhost:21580
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:21580}
     depends_on:
       postgres:
         condition: service_healthy
