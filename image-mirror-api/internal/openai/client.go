@@ -64,6 +64,7 @@ type imageResponse struct {
 type APIError struct {
 	StatusCode int
 	Message    string
+	Retryable  bool
 }
 
 func (e APIError) Error() string {
@@ -211,16 +212,16 @@ func (c *Client) doImageRequest(ctx context.Context, httpReq *http.Request) ([]b
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message, retryable := openAIErrorMessage(payload, resp.Header.Get("Content-Type"))
+		return nil, APIError{StatusCode: resp.StatusCode, Message: message, Retryable: retryable}
+	}
+	if !looksLikeJSON(payload) {
+		return nil, APIError{StatusCode: http.StatusBadGateway, Message: nonJSONResponseMessage(payload, resp.Header.Get("Content-Type")), Retryable: true}
+	}
 	var decoded imageResponse
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return nil, fmt.Errorf("decode openai response: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		message := ""
-		if decoded.Error != nil && decoded.Error.Message != "" {
-			message = decoded.Error.Message
-		}
-		return nil, APIError{StatusCode: resp.StatusCode, Message: message}
+		return nil, APIError{StatusCode: http.StatusBadGateway, Message: "image API returned invalid JSON: " + responseSnippet(payload), Retryable: true}
 	}
 	if len(decoded.Data) == 0 {
 		return nil, errors.New("openai returned no image data")
@@ -255,6 +256,9 @@ func isEndpointRetryable(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return true
 	}
+	if apiErr.Retryable {
+		return true
+	}
 	switch {
 	case apiErr.StatusCode == http.StatusUnauthorized, apiErr.StatusCode == http.StatusForbidden:
 		return true
@@ -267,4 +271,59 @@ func isEndpointRetryable(err error) bool {
 	default:
 		return false
 	}
+}
+
+func openAIErrorMessage(payload []byte, contentType string) (string, bool) {
+	if contentTypeIsJSON(contentType) || looksLikeJSON(payload) {
+		var decoded imageResponse
+		if err := json.Unmarshal(payload, &decoded); err == nil {
+			if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
+				return strings.TrimSpace(decoded.Error.Message), false
+			}
+			snippet := responseSnippet(payload)
+			if snippet != "" {
+				return "image API returned an error response: " + snippet, false
+			}
+			return "image API returned an empty error response", false
+		}
+		return "image API returned invalid JSON: " + responseSnippet(payload), true
+	}
+	return nonJSONResponseMessage(payload, contentType), true
+}
+
+func contentTypeIsJSON(contentType string) bool {
+	contentType = strings.ToLower(contentType)
+	return strings.Contains(contentType, "json")
+}
+
+func looksLikeJSON(payload []byte) bool {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return false
+	}
+	return trimmed[0] == '{' || trimmed[0] == '['
+}
+
+func nonJSONResponseMessage(payload []byte, contentType string) string {
+	snippet := responseSnippet(payload)
+	if snippet == "" {
+		return "image API returned an empty response"
+	}
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return "image API returned a non-JSON response: " + snippet
+	}
+	return fmt.Sprintf("image API returned a non-JSON response (%s): %s", contentType, snippet)
+}
+
+func responseSnippet(payload []byte) string {
+	snippet := strings.Join(strings.Fields(string(bytes.TrimSpace(payload))), " ")
+	if snippet == "" {
+		return ""
+	}
+	runes := []rune(snippet)
+	if len(runes) > 240 {
+		return string(runes[:240]) + "..."
+	}
+	return snippet
 }

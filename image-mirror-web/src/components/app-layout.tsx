@@ -18,8 +18,9 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { renderMarkdown } from "@/lib/markdown"
+import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle, platformSettingsUpdatedEvent } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { SiteContent } from "@/types"
+import type { PlatformSettings, SiteContent } from "@/types"
 
 const links = [
   { to: "/dashboard", label: "概览", icon: LayoutDashboard },
@@ -37,6 +38,35 @@ export function AppLayout() {
   const logout = useAuthStore((state) => state.logout)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
   const [announcementOpen, setAnnouncementOpen] = useState(false)
+  const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
+
+  useEffect(() => {
+    let active = true
+    const applySettings = (settings: Partial<PlatformSettings> | null | undefined) => {
+      const nextSettings = mergePlatformSettings(settings)
+      setPlatform(nextSettings)
+      document.title = platformDocumentTitle(nextSettings)
+    }
+    const handleSettingsUpdated = (event: Event) => {
+      applySettings((event as CustomEvent<PlatformSettings>).detail)
+    }
+
+    document.title = platformDocumentTitle(defaultPlatformSettings)
+    window.addEventListener(platformSettingsUpdatedEvent, handleSettingsUpdated)
+    api
+      .get<PlatformSettings>("/api/settings/platform")
+      .then((response) => {
+        if (!active) return
+        applySettings(response.data)
+      })
+      .catch(() => {
+        document.title = platformDocumentTitle(defaultPlatformSettings)
+      })
+    return () => {
+      active = false
+      window.removeEventListener(platformSettingsUpdatedEvent, handleSettingsUpdated)
+    }
+  }, [])
 
   useEffect(() => {
     api
@@ -65,8 +95,8 @@ export function AppLayout() {
                 <ImagePlus />
               </div>
               <div className="min-w-0">
-                <div className="font-heading text-base font-semibold">IM</div>
-                <div className="truncate text-xs text-muted-foreground">AI图像生成平台</div>
+                <div className="font-heading text-base font-semibold">{platform.siteTitle}</div>
+                <div className="truncate text-xs text-muted-foreground">{platform.siteSubtitle}</div>
               </div>
             </div>
             <Separator />

@@ -21,6 +21,8 @@ const (
 	KeyEPayRate      = "epay_credits_per_yuan"
 	KeyEPayEnabled   = "epay_enabled"
 	KeyMaxResolution = "max_resolution_bucket"
+	KeySiteTitle     = "site_title"
+	KeySiteSubtitle  = "site_subtitle"
 )
 
 type OpenAISettings struct {
@@ -44,6 +46,8 @@ type EPaySettings struct {
 type PlatformSettings struct {
 	MaxResolutionBucket string `json:"maxResolutionBucket"`
 	Allow4K             bool   `json:"allow4k"`
+	SiteTitle           string `json:"siteTitle"`
+	SiteSubtitle        string `json:"siteSubtitle"`
 }
 
 type Service struct {
@@ -59,13 +63,43 @@ func (s *Service) PublicPlatform(ctx context.Context) (PlatformSettings, error) 
 	if err != nil {
 		return PlatformSettings{}, err
 	}
-	return normalizePlatform(bucket), nil
+	title, err := s.value(ctx, KeySiteTitle)
+	if err != nil {
+		return PlatformSettings{}, err
+	}
+	subtitle, err := s.value(ctx, KeySiteSubtitle)
+	if err != nil {
+		return PlatformSettings{}, err
+	}
+	return normalizePlatform(bucket, title, subtitle), nil
 }
 
-func (s *Service) UpdatePlatform(ctx context.Context, maxResolutionBucket string, updatedBy string) (PlatformSettings, error) {
-	settings := normalizePlatform(maxResolutionBucket)
-	if err := s.upsert(ctx, KeyMaxResolution, settings.MaxResolutionBucket, updatedBy); err != nil {
+func (s *Service) UpdatePlatform(ctx context.Context, maxResolutionBucket string, siteTitle *string, siteSubtitle *string, updatedBy string) (PlatformSettings, error) {
+	current, err := s.PublicPlatform(ctx)
+	if err != nil {
 		return PlatformSettings{}, err
+	}
+	if strings.TrimSpace(maxResolutionBucket) == "" {
+		maxResolutionBucket = current.MaxResolutionBucket
+	}
+	title := current.SiteTitle
+	if siteTitle != nil {
+		title = *siteTitle
+	}
+	subtitle := current.SiteSubtitle
+	if siteSubtitle != nil {
+		subtitle = *siteSubtitle
+	}
+	settings := normalizePlatform(maxResolutionBucket, title, subtitle)
+	values := map[string]string{
+		KeyMaxResolution: settings.MaxResolutionBucket,
+		KeySiteTitle:     settings.SiteTitle,
+		KeySiteSubtitle:  settings.SiteSubtitle,
+	}
+	for key, value := range values {
+		if err := s.upsert(ctx, key, value, updatedBy); err != nil {
+			return PlatformSettings{}, err
+		}
 	}
 	return settings, nil
 }
@@ -275,13 +309,23 @@ func parsePositiveInt(value string) (int64, bool) {
 	return parsed, err == nil && parsed > 0
 }
 
-func normalizePlatform(maxResolutionBucket string) PlatformSettings {
+func normalizePlatform(maxResolutionBucket string, siteTitle string, siteSubtitle string) PlatformSettings {
 	bucket := strings.ToLower(strings.TrimSpace(maxResolutionBucket))
 	if bucket != "2k" {
 		bucket = "4k"
 	}
+	title := strings.TrimSpace(siteTitle)
+	if title == "" {
+		title = "IM"
+	}
+	subtitle := strings.TrimSpace(siteSubtitle)
+	if subtitle == "" {
+		subtitle = "AI图像生成平台"
+	}
 	return PlatformSettings{
 		MaxResolutionBucket: bucket,
 		Allow4K:             bucket == "4k",
+		SiteTitle:           title,
+		SiteSubtitle:        subtitle,
 	}
 }

@@ -30,7 +30,7 @@ function inline(text: string): ReactNode[] {
 }
 
 export function renderMarkdown(markdown: string) {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n")
+  const lines = markdown.replace(/\r\n?/g, "\n").replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").split("\n")
   const output: ReactNode[] = []
   let list: string[] = []
   let code: string[] | null = null

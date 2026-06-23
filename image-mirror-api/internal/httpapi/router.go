@@ -801,8 +801,10 @@ func updateEPayConfigHandler(s Services) gin.HandlerFunc {
 func updatePlatformConfigHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			MaxResolutionBucket string `json:"maxResolutionBucket"`
-			Allow4K             *bool  `json:"allow4k"`
+			MaxResolutionBucket string  `json:"maxResolutionBucket"`
+			Allow4K             *bool   `json:"allow4k"`
+			SiteTitle           *string `json:"siteTitle"`
+			SiteSubtitle        *string `json:"siteSubtitle"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
@@ -816,7 +818,7 @@ func updatePlatformConfigHandler(s Services) gin.HandlerFunc {
 				bucket = "2k"
 			}
 		}
-		settings, err := s.ConfigStore.UpdatePlatform(c.Request.Context(), bucket, CurrentUserID(c))
+		settings, err := s.ConfigStore.UpdatePlatform(c.Request.Context(), bucket, req.SiteTitle, req.SiteSubtitle, CurrentUserID(c))
 		if err != nil {
 			Abort(c, err)
 			return

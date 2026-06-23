@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import { ImagePlus, LogIn, UserPlus } from "lucide-react"
 import { Link, useNavigate } from "react-router-dom"
@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { TokenPair, User } from "@/types"
+import type { PlatformSettings, TokenPair, User } from "@/types"
 
 type AuthPageProps = {
   mode: "login" | "register"
@@ -22,7 +23,27 @@ export function AuthPage({ mode }: AuthPageProps) {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
+  const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
   const isLogin = mode === "login"
+
+  useEffect(() => {
+    let active = true
+    document.title = platformDocumentTitle(defaultPlatformSettings)
+    api
+      .get<PlatformSettings>("/api/settings/platform")
+      .then((response) => {
+        if (!active) return
+        const settings = mergePlatformSettings(response.data)
+        setPlatform(settings)
+        document.title = platformDocumentTitle(settings)
+      })
+      .catch(() => {
+        document.title = platformDocumentTitle(defaultPlatformSettings)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -49,9 +70,9 @@ export function AuthPage({ mode }: AuthPageProps) {
           <div className="mb-2 flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
             <ImagePlus />
           </div>
-          <CardTitle>{isLogin ? "登录 ImageMirror" : "创建账户"}</CardTitle>
+          <CardTitle>{isLogin ? `登录 ${platform.siteTitle}` : "创建账户"}</CardTitle>
           <CardDescription>
-            {isLogin ? "进入图像生成中转工作台" : "注册后可充值积分并创建 API Key"}
+            {isLogin ? platform.siteSubtitle : "注册后可充值积分并创建 API Key"}
           </CardDescription>
         </CardHeader>
         <CardContent>

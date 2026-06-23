@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Textarea } from "@/components/ui/textarea"
 import { downloadImage, expiresIn } from "@/lib/format"
 import { resolutionBucket, sizeString, validateImageSize } from "@/lib/image-size"
+import { defaultPlatformSettings, mergePlatformSettings } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
 import type { ImageGeneration, PlatformSettings, PricingRule } from "@/types"
 
@@ -60,7 +61,7 @@ export function GeneratePage() {
   const [sizeDraftError, setSizeDraftError] = useState<string | null>(null)
   const [quality, setQuality] = useState("medium")
   const [pricing, setPricing] = useState<PricingRule[]>([])
-  const [platform, setPlatform] = useState<PlatformSettings>({ maxResolutionBucket: "4k", allow4k: true })
+  const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
   const [current, setCurrent] = useState<ImageGeneration | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [referenceImages, setReferenceImages] = useState<ReferencePreview[]>([])
@@ -82,7 +83,7 @@ export function GeneratePage() {
     ])
       .then(([pricingResponse, platformResponse]) => {
         setPricing(pricingResponse.data.data ?? [])
-        setPlatform(platformResponse.data)
+        setPlatform(mergePlatformSettings(platformResponse.data))
       })
       .catch((error) => toast.error(errorMessage(error)))
   }, [])

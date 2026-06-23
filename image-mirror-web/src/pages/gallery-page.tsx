@@ -9,7 +9,7 @@ import { SecureImage } from "@/components/secure-image"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -22,6 +22,7 @@ export function GalleryPage() {
   const [selectionMode, setSelectionMode] = useState(false)
   const [detail, setDetail] = useState<ImageGeneration | null>(null)
   const [viewer, setViewer] = useState<ImageGeneration | null>(null)
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -75,6 +76,18 @@ export function GalleryPage() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function requestDeleteImages(ids: string[]) {
+    const uniqueIds = Array.from(new Set(ids))
+    if (uniqueIds.length === 0) return
+    setPendingDeleteIds(uniqueIds)
+  }
+
+  async function confirmDeleteImages() {
+    const ids = pendingDeleteIds
+    setPendingDeleteIds([])
+    await deleteImages(ids)
   }
 
   async function downloadSelected() {
@@ -131,7 +144,7 @@ export function GalleryPage() {
                   <Download data-icon="inline-start" />
                   下载 {completedSelected.length}
                 </Button>
-                <Button variant="outline" disabled={busy || selected.length === 0} onClick={() => void deleteImages(selected)}>
+                <Button variant="outline" disabled={busy || selected.length === 0} onClick={() => requestDeleteImages(selected)}>
                   <Trash2 data-icon="inline-start" />
                   删除 {selected.length}
                 </Button>
@@ -201,7 +214,7 @@ export function GalleryPage() {
                         <Download data-icon="inline-start" />
                         下载
                       </Button>
-                      <Button variant="outline" disabled={busy} onClick={() => void deleteImages([image.id])}>
+                      <Button variant="outline" disabled={busy} onClick={() => requestDeleteImages([image.id])}>
                         <Trash2 data-icon="inline-start" />
                         删除
                       </Button>
@@ -251,13 +264,33 @@ export function GalleryPage() {
                   <Download data-icon="inline-start" />
                   下载
                 </Button>
-                <Button variant="outline" disabled={busy} onClick={() => void deleteImages([detail.id])}>
+                <Button variant="outline" disabled={busy} onClick={() => requestDeleteImages([detail.id])}>
                   <Trash2 data-icon="inline-start" />
                   删除
                 </Button>
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pendingDeleteIds.length > 0} onOpenChange={(open) => !open && setPendingDeleteIds([])}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认删除图片</DialogTitle>
+          </DialogHeader>
+          <div className="text-sm text-muted-foreground">
+            确认删除 {pendingDeleteIds.length} 张图片？删除后不可恢复。
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={() => setPendingDeleteIds([])}>
+              取消
+            </Button>
+            <Button variant="destructive" disabled={busy} onClick={() => void confirmDeleteImages()}>
+              <Trash2 data-icon="inline-start" />
+              删除
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

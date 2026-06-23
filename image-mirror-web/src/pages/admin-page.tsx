@@ -35,10 +35,26 @@ import { Textarea } from "@/components/ui/textarea"
 import { formatDate } from "@/lib/format"
 import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
+import { defaultPlatformSettings, emitPlatformSettingsUpdated, mergePlatformSettings } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
 import type { AdminOverview, ContentAsset, EPaySettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
+
+function qualityLabel(value: string) {
+  switch (value) {
+    case "low":
+      return "低"
+    case "medium":
+      return "中"
+    case "high":
+      return "高"
+    case "auto":
+      return "自动"
+    default:
+      return value
+  }
+}
 
 export function AdminPage() {
   const currentUser = useAuthStore((state) => state.user)
@@ -49,7 +65,7 @@ export function AdminPage() {
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
   const [openAI, setOpenAI] = useState<OpenAISettings | null>(null)
   const [epay, setEPay] = useState<EPaySettings | null>(null)
-  const [platform, setPlatform] = useState<PlatformSettings>({ maxResolutionBucket: "4k", allow4k: true })
+  const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
   const [docs, setDocs] = useState<SiteContent | null>(null)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
 
@@ -69,6 +85,8 @@ export function AdminPage() {
   const [announcementTitle, setAnnouncementTitle] = useState("公告")
   const [announcementBody, setAnnouncementBody] = useState("")
   const [announcementActive, setAnnouncementActive] = useState(false)
+  const [siteTitle, setSiteTitle] = useState(defaultPlatformSettings.siteTitle)
+  const [siteSubtitle, setSiteSubtitle] = useState(defaultPlatformSettings.siteSubtitle)
 
   const [openAIEndpointName, setOpenAIEndpointName] = useState("默认节点")
   const [openAIBaseUrl, setOpenAIBaseUrl] = useState("https://api.openai.com")
@@ -120,8 +138,11 @@ export function AdminPage() {
       setEPayName(epayResponse.data.name || "ImageMirror credits")
       setEPayCreditsPerYuan(epayResponse.data.creditsPerYuan || 100)
       setEPayEnabled(epayResponse.data.enabled)
-      setPlatform(platformResponse.data)
-      setSize((value) => (!platformResponse.data.allow4k && value === "4k" ? "2k" : value))
+      const nextPlatform = mergePlatformSettings(platformResponse.data)
+      setPlatform(nextPlatform)
+      setSiteTitle(nextPlatform.siteTitle)
+      setSiteSubtitle(nextPlatform.siteSubtitle)
+      setSize((value) => (!nextPlatform.allow4k && value === "4k" ? "2k" : value))
 
       setDocs(docsResponse.data)
       setDocsTitle(docsResponse.data.title || "文档")
@@ -184,12 +205,15 @@ export function AdminPage() {
       const { data } = await api.put<PlatformSettings>("/api/admin/config/platform", {
         maxResolutionBucket: allow4k ? "4k" : "2k",
       })
-      setPlatform(data)
-      if (!data.allow4k && size === "4k") {
+      const nextPlatform = mergePlatformSettings(data)
+      setPlatform(nextPlatform)
+      setSiteTitle(nextPlatform.siteTitle)
+      setSiteSubtitle(nextPlatform.siteSubtitle)
+      if (!nextPlatform.allow4k && size === "4k") {
         setSize("2k")
         setEditingPricingId(null)
       }
-      toast.success(data.allow4k ? "已启用 4K 图片" : "已禁用 4K，最大支持 2K")
+      toast.success(nextPlatform.allow4k ? "已启用 4K 图片" : "已禁用 4K，最大支持 2K")
       await load()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -276,6 +300,25 @@ export function AdminPage() {
     const { data } = await api.get<OpenAISettings>("/api/admin/config/openai")
     setOpenAI(data)
     return data
+  }
+
+  async function savePlatform(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    try {
+      const { data } = await api.put<PlatformSettings>("/api/admin/config/platform", {
+        maxResolutionBucket: platform.maxResolutionBucket,
+        siteTitle,
+        siteSubtitle,
+      })
+      const nextPlatform = mergePlatformSettings(data)
+      setPlatform(nextPlatform)
+      setSiteTitle(nextPlatform.siteTitle)
+      setSiteSubtitle(nextPlatform.siteSubtitle)
+      emitPlatformSettingsUpdated(nextPlatform)
+      toast.success("平台信息已保存")
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
   }
 
   async function saveOpenAIEndpoint(event: FormEvent<HTMLFormElement>) {
@@ -505,6 +548,29 @@ export function AdminPage() {
               <Badge variant="secondary">用户 {users.length}</Badge>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>平台信息</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]" onSubmit={savePlatform}>
+                <Field>
+                  <FieldLabel htmlFor="site-title">标题</FieldLabel>
+                  <Input id="site-title" value={siteTitle} onChange={(event) => setSiteTitle(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="site-subtitle">副标题</FieldLabel>
+                  <Input id="site-subtitle" value={siteSubtitle} onChange={(event) => setSiteSubtitle(event.target.value)} />
+                </Field>
+                <div className="flex items-end">
+                  <Button type="submit" className="w-full lg:w-auto">
+                    <Save data-icon="inline-start" />
+                    保存
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="users">
@@ -619,13 +685,13 @@ export function AdminPage() {
                     <FieldLabel>质量</FieldLabel>
                     <Select value={quality} onValueChange={(value) => setQuality(value ?? quality)}>
                       <SelectTrigger className="w-full">
-                        <SelectValue />
+                        <SelectValue>{qualityLabel(quality)}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
                           {qualities.map((item) => (
                             <SelectItem key={item} value={item}>
-                              {item}
+                              {qualityLabel(item)}
                             </SelectItem>
                           ))}
                         </SelectGroup>
@@ -681,7 +747,7 @@ export function AdminPage() {
                     <TableRow key={rule.id}>
                       <TableCell>{rule.model}</TableCell>
                       <TableCell>{rule.size.toUpperCase()}</TableCell>
-                      <TableCell>{rule.quality}</TableCell>
+                      <TableCell>{qualityLabel(rule.quality)}</TableCell>
                       <TableCell className="tabular-nums">{rule.credits}</TableCell>
                       <TableCell>
                         <div className="flex gap-2">
@@ -817,7 +883,7 @@ export function AdminPage() {
                     <FieldLabel htmlFor="docs-active">状态</FieldLabel>
                     <Select value={docsActive ? "true" : "false"} onValueChange={(value) => setDocsActive(value === "true")}>
                       <SelectTrigger id="docs-active" className="w-full">
-                        <SelectValue />
+                        <SelectValue>{docsActive ? "发布" : "隐藏"}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
@@ -870,7 +936,7 @@ export function AdminPage() {
                     <FieldLabel htmlFor="announcement-active">状态</FieldLabel>
                     <Select value={announcementActive ? "true" : "false"} onValueChange={(value) => setAnnouncementActive(value === "true")}>
                       <SelectTrigger id="announcement-active" className="w-full">
-                        <SelectValue />
+                        <SelectValue>{announcementActive ? "启用" : "停用"}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
@@ -1092,7 +1158,7 @@ export function AdminPage() {
                     <FieldLabel htmlFor="epay-enabled">启用状态</FieldLabel>
                     <Select value={epayEnabled ? "true" : "false"} onValueChange={(value) => setEPayEnabled(value === "true")}>
                       <SelectTrigger id="epay-enabled" className="w-full">
-                        <SelectValue />
+                        <SelectValue>{epayEnabled ? "启用" : "停用"}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
