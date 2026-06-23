@@ -12,7 +12,6 @@ import {
   Plus,
   RefreshCw,
   Save,
-  Settings,
   Shield,
   ToggleLeft,
   ToggleRight,
@@ -37,7 +36,7 @@ import { formatDate } from "@/lib/format"
 import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
 import { useAuthStore } from "@/stores/auth"
-import type { AdminOverview, ContentAsset, EPaySettings, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, User } from "@/types"
+import type { AdminOverview, ContentAsset, EPaySettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
 
@@ -71,8 +70,13 @@ export function AdminPage() {
   const [announcementBody, setAnnouncementBody] = useState("")
   const [announcementActive, setAnnouncementActive] = useState(false)
 
+  const [openAIEndpointName, setOpenAIEndpointName] = useState("默认节点")
   const [openAIBaseUrl, setOpenAIBaseUrl] = useState("https://api.openai.com")
   const [openAIKey, setOpenAIKey] = useState("")
+  const [openAIEnabled, setOpenAIEnabled] = useState(true)
+  const [openAISchedulable, setOpenAISchedulable] = useState(true)
+  const [openAIPriority, setOpenAIPriority] = useState(100)
+  const [editingOpenAIEndpointId, setEditingOpenAIEndpointId] = useState<string | null>(null)
   const [epayGateway, setEPayGateway] = useState("https://pay.example.com")
   const [epayPID, setEPayPID] = useState("")
   const [epayKey, setEPayKey] = useState("")
@@ -106,7 +110,9 @@ export function AdminPage() {
       setSelectedCodes((state) => state.filter((id) => (codesResponse.data.data ?? []).some((code) => code.id === id)))
 
       setOpenAI(openAIResponse.data)
-      setOpenAIBaseUrl(openAIResponse.data.openaiBaseUrl || "https://api.openai.com")
+      if (!editingOpenAIEndpointId && (openAIResponse.data.endpoints?.length ?? 0) === 0) {
+        setOpenAIBaseUrl(openAIResponse.data.openaiBaseUrl || "https://api.openai.com")
+      }
 
       setEPay(epayResponse.data)
       setEPayGateway(epayResponse.data.gateway || "https://pay.example.com")
@@ -129,7 +135,7 @@ export function AdminPage() {
     } catch (error) {
       toast.error(errorMessage(error))
     }
-  }, [])
+  }, [editingOpenAIEndpointId])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -266,20 +272,82 @@ export function AdminPage() {
     }
   }
 
-  async function saveOpenAI(event: FormEvent<HTMLFormElement>) {
+  async function refreshOpenAISettings() {
+    const { data } = await api.get<OpenAISettings>("/api/admin/config/openai")
+    setOpenAI(data)
+    return data
+  }
+
+  async function saveOpenAIEndpoint(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     try {
-      const payload: { openaiBaseUrl: string; openaiApiKey?: string } = {
-        openaiBaseUrl: openAIBaseUrl.trim(),
+      const payload: {
+        name: string
+        baseUrl: string
+        apiKey?: string
+        enabled: boolean
+        schedulable: boolean
+        priority: number
+      } = {
+        name: openAIEndpointName.trim(),
+        baseUrl: openAIBaseUrl.trim(),
+        enabled: openAIEnabled,
+        schedulable: openAISchedulable,
+        priority: openAIPriority,
       }
       if (openAIKey.trim()) {
-        payload.openaiApiKey = openAIKey.trim()
+        payload.apiKey = openAIKey.trim()
       }
-      const { data } = await api.put<OpenAISettings>("/api/admin/config/openai", payload)
-      setOpenAI(data)
-      setOpenAIBaseUrl(data.openaiBaseUrl)
-      setOpenAIKey("")
-      toast.success("OpenAI 配置已保存")
+      if (editingOpenAIEndpointId) {
+        await api.put(`/api/admin/config/openai/endpoints/${editingOpenAIEndpointId}`, payload)
+      } else {
+        await api.post("/api/admin/config/openai/endpoints", payload)
+      }
+      await refreshOpenAISettings()
+      resetOpenAIForm()
+      toast.success(editingOpenAIEndpointId ? "API 节点已更新" : "API 节点已新增")
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  function editOpenAIEndpoint(endpoint: OpenAIEndpoint) {
+    setEditingOpenAIEndpointId(endpoint.id)
+    setOpenAIEndpointName(endpoint.name)
+    setOpenAIBaseUrl(endpoint.baseUrl)
+    setOpenAIKey("")
+    setOpenAIEnabled(endpoint.enabled)
+    setOpenAISchedulable(endpoint.schedulable)
+    setOpenAIPriority(endpoint.priority)
+  }
+
+  function resetOpenAIForm() {
+    setEditingOpenAIEndpointId(null)
+    setOpenAIEndpointName("默认节点")
+    setOpenAIBaseUrl("https://api.openai.com")
+    setOpenAIKey("")
+    setOpenAIEnabled(true)
+    setOpenAISchedulable(true)
+    setOpenAIPriority(100)
+  }
+
+  async function deleteOpenAIEndpoint(endpoint: OpenAIEndpoint) {
+    if (!window.confirm(`确认删除 API 节点 ${endpoint.name}？`)) return
+    try {
+      await api.delete(`/api/admin/config/openai/endpoints/${endpoint.id}`)
+      if (editingOpenAIEndpointId === endpoint.id) resetOpenAIForm()
+      await refreshOpenAISettings()
+      toast.success("API 节点已删除")
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  async function resetOpenAIEndpoint(endpoint: OpenAIEndpoint) {
+    try {
+      await api.post(`/api/admin/config/openai/endpoints/${endpoint.id}/reset`)
+      await refreshOpenAISettings()
+      toast.success("熔断状态已恢复")
     } catch (error) {
       toast.error(errorMessage(error))
     }
@@ -836,19 +904,22 @@ export function AdminPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="openai">
-          <Card className="max-w-2xl">
+        <TabsContent value="openai" className="grid gap-4 xl:grid-cols-[360px_1fr]">
+          <Card>
             <CardHeader>
-              <CardTitle>OpenAI 配置</CardTitle>
-              <CardDescription>配置平台调用图像 API 使用的 Base URL 和 API Key。</CardDescription>
+              <CardTitle>{editingOpenAIEndpointId ? "编辑 API 节点" : "新增 API 节点"}</CardTitle>
+              <CardDescription>配置兼容 OpenAI 图像接口的 Base URL、密钥和调度策略。</CardDescription>
             </CardHeader>
             <CardContent>
-              <form className="flex flex-col gap-5" onSubmit={saveOpenAI}>
+              <form className="flex flex-col gap-5" onSubmit={saveOpenAIEndpoint}>
                 <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="openai-endpoint-name">名称</FieldLabel>
+                    <Input id="openai-endpoint-name" value={openAIEndpointName} onChange={(event) => setOpenAIEndpointName(event.target.value)} />
+                  </Field>
                   <Field>
                     <FieldLabel htmlFor="openai-base-url">Base URL</FieldLabel>
                     <Input id="openai-base-url" value={openAIBaseUrl} onChange={(event) => setOpenAIBaseUrl(event.target.value)} />
-                    <FieldDescription>默认使用 https://api.openai.com，也可以填写兼容 OpenAI 的中转地址。</FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="openai-key">API Key</FieldLabel>
@@ -857,20 +928,131 @@ export function AdminPage() {
                       type="password"
                       value={openAIKey}
                       onChange={(event) => setOpenAIKey(event.target.value)}
-                      placeholder={openAI?.hasOpenaiApiKey ? "留空则保持当前密钥" : "输入 API Key"}
+                      placeholder={editingOpenAIEndpointId ? "留空则保持当前密钥" : "输入 API Key"}
                     />
                     <FieldDescription>密钥只写入后台配置，保存后不会在页面回显。</FieldDescription>
                   </Field>
+                  <Field>
+                    <FieldLabel htmlFor="openai-priority">优先级</FieldLabel>
+                    <Input id="openai-priority" type="number" min={1} max={10000} value={openAIPriority} onChange={(event) => setOpenAIPriority(Math.max(1, Number(event.target.value) || 100))} />
+                    <FieldDescription>数字越小越优先，同优先级按最近使用时间轮询。</FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="openai-enabled">启用状态</FieldLabel>
+                    <Select value={openAIEnabled ? "true" : "false"} onValueChange={(value) => setOpenAIEnabled(value === "true")}>
+                      <SelectTrigger id="openai-enabled" className="w-full">
+                        <SelectValue>{openAIEnabled ? "启用" : "停用"}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="true">启用</SelectItem>
+                          <SelectItem value="false">停用</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="openai-schedulable">调度状态</FieldLabel>
+                    <Select value={openAISchedulable ? "true" : "false"} onValueChange={(value) => setOpenAISchedulable(value === "true")}>
+                      <SelectTrigger id="openai-schedulable" className="w-full">
+                        <SelectValue>{openAISchedulable ? "可调度" : "仅保存"}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="true">可调度</SelectItem>
+                          <SelectItem value="false">仅保存</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
                 </FieldGroup>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={openAI?.hasOpenaiApiKey ? "secondary" : "outline"}>{openAI?.hasOpenaiApiKey ? "API Key 已配置" : "API Key 未配置"}</Badge>
+                  <Badge variant={openAI?.hasOpenaiApiKey ? "secondary" : "outline"}>{openAI?.hasOpenaiApiKey ? "存在可用密钥" : "未配置密钥"}</Badge>
                   {openAI?.usesEnvironmentKey && <Badge variant="outline">使用环境变量兜底</Badge>}
                 </div>
-                <Button type="submit">
-                  <Settings data-icon="inline-start" />
-                  保存配置
-                </Button>
+                <div className="flex gap-2">
+                  <Button type="submit">
+                    {editingOpenAIEndpointId ? <Save data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
+                    {editingOpenAIEndpointId ? "更新节点" : "新增节点"}
+                  </Button>
+                  {editingOpenAIEndpointId && (
+                    <Button type="button" variant="outline" onClick={resetOpenAIForm}>
+                      取消
+                    </Button>
+                  )}
+                </div>
               </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle>API 节点</CardTitle>
+                  <CardDescription>生成任务会按优先级轮询可调度节点，连续失败后自动熔断。</CardDescription>
+                </div>
+                <Badge variant="secondary">{openAI?.endpoints?.filter((endpoint) => endpoint.enabled && endpoint.schedulable).length ?? 0} 个可调度</Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>节点</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead>优先级</TableHead>
+                    <TableHead>失败</TableHead>
+                    <TableHead>熔断</TableHead>
+                    <TableHead>最近结果</TableHead>
+                    <TableHead>操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(openAI?.endpoints ?? []).map((endpoint) => (
+                    <TableRow key={endpoint.id}>
+                      <TableCell>
+                        <div className="flex min-w-[220px] flex-col gap-1">
+                          <span className="font-medium">{endpoint.name}</span>
+                          <span className="truncate text-xs text-muted-foreground">{endpoint.baseUrl}</span>
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant={endpoint.hasApiKey ? "secondary" : "outline"}>{endpoint.hasApiKey ? "密钥已配置" : "密钥未配置"}</Badge>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          <Badge variant={endpoint.enabled ? "secondary" : "outline"}>{endpoint.enabled ? "启用" : "停用"}</Badge>
+                          <Badge variant={endpoint.schedulable ? "secondary" : "outline"}>{endpoint.schedulable ? "可调度" : "仅保存"}</Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell className="tabular-nums">{endpoint.priority}</TableCell>
+                      <TableCell className="tabular-nums">{endpoint.failureCount}</TableCell>
+                      <TableCell>{endpoint.circuitOpenUntil ? formatDate(endpoint.circuitOpenUntil) : "-"}</TableCell>
+                      <TableCell>
+                        <div className="flex min-w-[170px] flex-col gap-1 text-xs text-muted-foreground">
+                          <span>成功 {formatDate(endpoint.lastSuccessAt)}</span>
+                          <span>失败 {formatDate(endpoint.lastFailureAt)}</span>
+                          {endpoint.lastError && <span className="line-clamp-1 text-destructive">{endpoint.lastError}</span>}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="outline" size="icon" aria-label="编辑 API 节点" onClick={() => editOpenAIEndpoint(endpoint)}>
+                            <Pencil />
+                          </Button>
+                          <Button variant="outline" size="icon" aria-label="恢复熔断" onClick={() => void resetOpenAIEndpoint(endpoint)}>
+                            <RefreshCw />
+                          </Button>
+                          <Button variant="outline" size="icon" aria-label="删除 API 节点" onClick={() => void deleteOpenAIEndpoint(endpoint)}>
+                            <Trash2 />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
         </TabsContent>

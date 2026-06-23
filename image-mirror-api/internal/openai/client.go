@@ -15,11 +15,27 @@ import (
 )
 
 type Client struct {
-	credentials CredentialProvider
-	http        *http.Client
+	endpoints     EndpointProvider
+	reportAttempt func(ctx context.Context, endpointID string)
+	reportSuccess func(ctx context.Context, endpointID string)
+	reportFailure func(ctx context.Context, endpointID string, message string)
+	http          *http.Client
 }
 
-type CredentialProvider func(ctx context.Context) (apiKey string, baseURL string, err error)
+type EndpointProvider func(ctx context.Context) ([]Endpoint, error)
+
+type Endpoint struct {
+	ID      string
+	Name    string
+	APIKey  string
+	BaseURL string
+}
+
+type EndpointReporter struct {
+	Attempt func(ctx context.Context, endpointID string)
+	Success func(ctx context.Context, endpointID string)
+	Failure func(ctx context.Context, endpointID string, message string)
+}
 
 type ImageRequest struct {
 	Model   string `json:"model"`
@@ -45,10 +61,25 @@ type imageResponse struct {
 	} `json:"error,omitempty"`
 }
 
-func NewClient(timeout time.Duration, credentials CredentialProvider) *Client {
+type APIError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e APIError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("openai error: %s", e.Message)
+	}
+	return fmt.Sprintf("openai error status %d", e.StatusCode)
+}
+
+func NewClient(timeout time.Duration, endpoints EndpointProvider, reporter EndpointReporter) *Client {
 	return &Client{
-		credentials: credentials,
-		http:        &http.Client{Timeout: timeout},
+		endpoints:     endpoints,
+		reportAttempt: reporter.Attempt,
+		reportSuccess: reporter.Success,
+		reportFailure: reporter.Failure,
+		http:          &http.Client{Timeout: timeout},
 	}
 }
 
@@ -59,22 +90,52 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest, references
 	if req.N == 0 {
 		req.N = 1
 	}
-	apiKey, baseURL, err := c.credentials(ctx)
+	endpoints, err := c.endpoints(ctx)
 	if err != nil {
 		return nil, err
 	}
-	apiKey = strings.TrimSpace(apiKey)
-	baseURL = normalizeBaseURL(baseURL)
-	if apiKey == "" {
+	if len(endpoints) == 0 {
 		return nil, errors.New("openai api key is not configured")
 	}
-	if baseURL == "" {
-		baseURL = "https://api.openai.com"
+
+	var lastErr error
+	for _, endpoint := range endpoints {
+		endpoint.APIKey = strings.TrimSpace(endpoint.APIKey)
+		endpoint.BaseURL = normalizeBaseURL(endpoint.BaseURL)
+		if endpoint.APIKey == "" {
+			continue
+		}
+		if endpoint.BaseURL == "" {
+			endpoint.BaseURL = "https://api.openai.com"
+		}
+		if c.reportAttempt != nil {
+			c.reportAttempt(ctx, endpoint.ID)
+		}
+
+		var data []byte
+		if len(references) > 0 {
+			data, err = c.editImage(ctx, endpoint.BaseURL, endpoint.APIKey, req, references)
+		} else {
+			data, err = c.generateImage(ctx, endpoint.BaseURL, endpoint.APIKey, req)
+		}
+		if err == nil {
+			if c.reportSuccess != nil {
+				c.reportSuccess(ctx, endpoint.ID)
+			}
+			return data, nil
+		}
+		if !isEndpointRetryable(err) {
+			return nil, err
+		}
+		lastErr = err
+		if c.reportFailure != nil {
+			c.reportFailure(ctx, endpoint.ID, err.Error())
+		}
 	}
-	if len(references) > 0 {
-		return c.editImage(ctx, baseURL, apiKey, req, references)
+	if lastErr != nil {
+		return nil, fmt.Errorf("all openai endpoints failed: %w", lastErr)
 	}
-	return c.generateImage(ctx, baseURL, apiKey, req)
+	return nil, errors.New("openai api key is not configured")
 }
 
 func (c *Client) generateImage(ctx context.Context, baseURL string, apiKey string, req ImageRequest) ([]byte, error) {
@@ -155,10 +216,11 @@ func (c *Client) doImageRequest(ctx context.Context, httpReq *http.Request) ([]b
 		return nil, fmt.Errorf("decode openai response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := ""
 		if decoded.Error != nil && decoded.Error.Message != "" {
-			return nil, fmt.Errorf("openai error: %s", decoded.Error.Message)
+			message = decoded.Error.Message
 		}
-		return nil, fmt.Errorf("openai error status %d", resp.StatusCode)
+		return nil, APIError{StatusCode: resp.StatusCode, Message: message}
 	}
 	if len(decoded.Data) == 0 {
 		return nil, errors.New("openai returned no image data")
@@ -186,4 +248,23 @@ func (c *Client) download(ctx context.Context, imageURL string) ([]byte, error) 
 		return nil, fmt.Errorf("download generated image status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+func isEndpointRetryable(err error) bool {
+	var apiErr APIError
+	if !errors.As(err, &apiErr) {
+		return true
+	}
+	switch {
+	case apiErr.StatusCode == http.StatusUnauthorized, apiErr.StatusCode == http.StatusForbidden:
+		return true
+	case apiErr.StatusCode == http.StatusTooManyRequests:
+		return true
+	case apiErr.StatusCode == http.StatusRequestTimeout:
+		return true
+	case apiErr.StatusCode >= 500:
+		return true
+	default:
+		return false
+	}
 }

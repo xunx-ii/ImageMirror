@@ -81,6 +81,25 @@ export type OpenAISettings = {
   openaiBaseUrl: string
   hasOpenaiApiKey: boolean
   usesEnvironmentKey: boolean
+  endpoints: OpenAIEndpoint[]
+}
+
+export type OpenAIEndpoint = {
+  id: string
+  name: string
+  baseUrl: string
+  hasApiKey: boolean
+  enabled: boolean
+  schedulable: boolean
+  priority: number
+  failureCount: number
+  circuitOpenUntil?: string
+  lastError?: string
+  lastUsedAt?: string
+  lastSuccessAt?: string
+  lastFailureAt?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type EPaySettings = {

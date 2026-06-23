@@ -69,9 +69,30 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 	authSvc := auth.NewService(cfg, usersRepo, redisClient)
 	storageSvc := storage.NewLocal(cfg.StorageRoot)
 	systemConfigSvc := systemconfig.NewService(db)
-	openAIClient := openai.NewClient(cfg.OpenAITimeout, func(ctx context.Context) (string, string, error) {
-		return systemConfigSvc.GetOpenAI(ctx, cfg.OpenAIAPIKey, cfg.OpenAIBaseURL)
-	})
+	openAIClient := openai.NewClient(
+		cfg.OpenAITimeout,
+		func(ctx context.Context) ([]openai.Endpoint, error) {
+			credentials, err := systemConfigSvc.OpenAIEndpointCandidates(ctx, cfg.OpenAIAPIKey, cfg.OpenAIBaseURL)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]openai.Endpoint, 0, len(credentials))
+			for _, credential := range credentials {
+				out = append(out, openai.Endpoint{
+					ID:      credential.ID,
+					Name:    credential.Name,
+					APIKey:  credential.APIKey,
+					BaseURL: credential.BaseURL,
+				})
+			}
+			return out, nil
+		},
+		openai.EndpointReporter{
+			Attempt: systemConfigSvc.MarkOpenAIEndpointAttempt,
+			Success: systemConfigSvc.MarkOpenAIEndpointSuccess,
+			Failure: systemConfigSvc.MarkOpenAIEndpointFailure,
+		},
+	)
 	imagesSvc := images.NewService(cfg, db, pricingSvc, billingSvc, storageSvc, openAIClient, systemConfigSvc)
 	paymentSvc := payments.NewService(db, systemConfigSvc, cfg.PublicBaseURL)
 	redemptionSvc := redemptions.NewService(db)

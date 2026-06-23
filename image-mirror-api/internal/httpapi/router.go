@@ -96,6 +96,10 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.DELETE("/pricing/:id", deletePricingHandler(s.Pricing))
 	adminGroup.GET("/config/openai", openAIConfigHandler(s))
 	adminGroup.PUT("/config/openai", updateOpenAIConfigHandler(s))
+	adminGroup.POST("/config/openai/endpoints", createOpenAIEndpointHandler(s))
+	adminGroup.PUT("/config/openai/endpoints/:id", updateOpenAIEndpointHandler(s))
+	adminGroup.DELETE("/config/openai/endpoints/:id", deleteOpenAIEndpointHandler(s))
+	adminGroup.POST("/config/openai/endpoints/:id/reset", resetOpenAIEndpointHandler(s))
 	adminGroup.GET("/config/epay", epayConfigHandler(s))
 	adminGroup.PUT("/config/epay", updateEPayConfigHandler(s))
 	adminGroup.GET("/config/platform", platformSettingsHandler(s))
@@ -667,6 +671,91 @@ func updateOpenAIConfigHandler(s Services) gin.HandlerFunc {
 		}
 		OK(c, settings)
 	}
+}
+
+func createOpenAIEndpointHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		input, ok := bindOpenAIEndpointInput(c, true)
+		if !ok {
+			return
+		}
+		endpoint, err := s.ConfigStore.CreateOpenAIEndpoint(c.Request.Context(), input, CurrentUserID(c))
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		Created(c, gin.H{"endpoint": endpoint})
+	}
+}
+
+func updateOpenAIEndpointHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		input, ok := bindOpenAIEndpointInput(c, false)
+		if !ok {
+			return
+		}
+		endpoint, err := s.ConfigStore.UpdateOpenAIEndpoint(c.Request.Context(), c.Param("id"), input, CurrentUserID(c))
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		OK(c, gin.H{"endpoint": endpoint})
+	}
+}
+
+func deleteOpenAIEndpointHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := s.ConfigStore.DeleteOpenAIEndpoint(c.Request.Context(), c.Param("id")); err != nil {
+			Abort(c, NewError(http.StatusNotFound, err.Error(), err))
+			return
+		}
+		OK(c, gin.H{"ok": true})
+	}
+}
+
+func resetOpenAIEndpointHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		endpoint, err := s.ConfigStore.ResetOpenAIEndpointCircuit(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			Abort(c, NewError(http.StatusNotFound, err.Error(), err))
+			return
+		}
+		OK(c, gin.H{"endpoint": endpoint})
+	}
+}
+
+func bindOpenAIEndpointInput(c *gin.Context, requireKey bool) (systemconfig.OpenAIEndpointInput, bool) {
+	var req struct {
+		Name        string  `json:"name"`
+		BaseURL     string  `json:"baseUrl"`
+		APIKey      *string `json:"apiKey"`
+		Enabled     *bool   `json:"enabled"`
+		Schedulable *bool   `json:"schedulable"`
+		Priority    int     `json:"priority"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+		return systemconfig.OpenAIEndpointInput{}, false
+	}
+	input := systemconfig.OpenAIEndpointInput{
+		Name:        req.Name,
+		BaseURL:     req.BaseURL,
+		APIKey:      req.APIKey,
+		Enabled:     true,
+		Schedulable: true,
+		Priority:    req.Priority,
+	}
+	if req.Enabled != nil {
+		input.Enabled = *req.Enabled
+	}
+	if req.Schedulable != nil {
+		input.Schedulable = *req.Schedulable
+	}
+	if requireKey && (req.APIKey == nil || strings.TrimSpace(*req.APIKey) == "") {
+		Abort(c, NewError(http.StatusBadRequest, "api key is required", nil))
+		return systemconfig.OpenAIEndpointInput{}, false
+	}
+	return input, true
 }
 
 func epayConfigHandler(s Services) gin.HandlerFunc {

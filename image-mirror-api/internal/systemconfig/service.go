@@ -24,10 +24,11 @@ const (
 )
 
 type OpenAISettings struct {
-	OpenAIBaseURL      string `json:"openaiBaseUrl"`
-	OpenAIAPIKey       string `json:"openaiApiKey,omitempty"`
-	HasOpenAIAPIKey    bool   `json:"hasOpenaiApiKey"`
-	UsesEnvironmentKey bool   `json:"usesEnvironmentKey"`
+	OpenAIBaseURL      string           `json:"openaiBaseUrl"`
+	OpenAIAPIKey       string           `json:"openaiApiKey,omitempty"`
+	HasOpenAIAPIKey    bool             `json:"hasOpenaiApiKey"`
+	UsesEnvironmentKey bool             `json:"usesEnvironmentKey"`
+	Endpoints          []OpenAIEndpoint `json:"endpoints"`
 }
 
 type EPaySettings struct {
@@ -78,54 +79,74 @@ func (s *Service) MaxResolutionBucket(ctx context.Context) (string, error) {
 }
 
 func (s *Service) GetOpenAI(ctx context.Context, fallbackAPIKey string, fallbackBaseURL string) (string, string, error) {
-	apiKey, err := s.value(ctx, KeyOpenAIAPIKey)
+	candidates, err := s.OpenAIEndpointCandidates(ctx, fallbackAPIKey, fallbackBaseURL)
 	if err != nil {
 		return "", "", err
 	}
-	baseURL, err := s.value(ctx, KeyOpenAIBaseURL)
-	if err != nil {
-		return "", "", err
+	if len(candidates) > 0 {
+		return candidates[0].APIKey, candidates[0].BaseURL, nil
 	}
-	if apiKey == "" {
-		apiKey = fallbackAPIKey
-	}
-	if baseURL == "" {
-		baseURL = fallbackBaseURL
-	}
-	return strings.TrimSpace(apiKey), strings.TrimRight(strings.TrimSpace(baseURL), "/"), nil
+	return "", "", nil
 }
 
 func (s *Service) PublicOpenAI(ctx context.Context, fallbackAPIKey string, fallbackBaseURL string) (OpenAISettings, error) {
-	storedKey, err := s.value(ctx, KeyOpenAIAPIKey)
+	endpoints, err := s.ListOpenAIEndpoints(ctx)
 	if err != nil {
 		return OpenAISettings{}, err
 	}
-	apiKey, baseURL, err := s.GetOpenAI(ctx, fallbackAPIKey, fallbackBaseURL)
-	if err != nil {
-		return OpenAISettings{}, err
+	settings := OpenAISettings{
+		OpenAIBaseURL:      normalizeOpenAIBaseURL(fallbackBaseURL),
+		UsesEnvironmentKey: len(endpoints) == 0 && strings.TrimSpace(fallbackAPIKey) != "",
+		Endpoints:          endpoints,
 	}
-	return OpenAISettings{
-		OpenAIBaseURL:      baseURL,
-		HasOpenAIAPIKey:    apiKey != "",
-		UsesEnvironmentKey: storedKey == "" && fallbackAPIKey != "",
-	}, nil
+	if len(endpoints) > 0 {
+		settings.OpenAIBaseURL = endpoints[0].BaseURL
+		settings.HasOpenAIAPIKey = false
+		for _, endpoint := range endpoints {
+			if endpoint.HasAPIKey {
+				settings.HasOpenAIAPIKey = true
+				break
+			}
+		}
+		return settings, nil
+	}
+	settings.HasOpenAIAPIKey = strings.TrimSpace(fallbackAPIKey) != ""
+	return settings, nil
 }
 
 func (s *Service) UpdateOpenAI(ctx context.Context, baseURL string, apiKey *string, updatedBy string) (OpenAISettings, error) {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	baseURL = normalizeOpenAIBaseURL(baseURL)
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}
-	if err := s.upsert(ctx, KeyOpenAIBaseURL, baseURL, updatedBy); err != nil {
+	endpoints, err := s.ListOpenAIEndpoints(ctx)
+	if err != nil {
 		return OpenAISettings{}, err
 	}
-	if apiKey != nil {
-		trimmed := strings.TrimSpace(*apiKey)
-		if trimmed != "" {
-			if err := s.upsert(ctx, KeyOpenAIAPIKey, trimmed, updatedBy); err != nil {
-				return OpenAISettings{}, err
-			}
+	input := OpenAIEndpointInput{
+		Name:        "默认节点",
+		BaseURL:     baseURL,
+		APIKey:      apiKey,
+		Enabled:     true,
+		Schedulable: true,
+		Priority:    100,
+	}
+	if len(endpoints) == 0 {
+		if apiKey == nil || strings.TrimSpace(*apiKey) == "" {
+			return OpenAISettings{}, errors.New("api key is required")
 		}
+		if _, err := s.CreateOpenAIEndpoint(ctx, input, updatedBy); err != nil {
+			return OpenAISettings{}, err
+		}
+		return s.PublicOpenAI(ctx, "", baseURL)
+	}
+	first := endpoints[0]
+	input.Name = first.Name
+	input.Enabled = first.Enabled
+	input.Schedulable = first.Schedulable
+	input.Priority = first.Priority
+	if _, err := s.UpdateOpenAIEndpoint(ctx, first.ID, input, updatedBy); err != nil {
+		return OpenAISettings{}, err
 	}
 	return s.PublicOpenAI(ctx, "", baseURL)
 }
