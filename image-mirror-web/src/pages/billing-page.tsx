@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import type { FormEvent } from "react"
-import { BadgeCent, Gift, RefreshCw } from "lucide-react"
+import { BadgeCent, ExternalLink, Gift, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
@@ -17,6 +17,11 @@ import { formatDate } from "@/lib/format"
 import { useAuthStore } from "@/stores/auth"
 import type { CreditTransaction, PaymentOrder, RedemptionHistoryItem } from "@/types"
 
+type PaymentSession = {
+  order: PaymentOrder
+  payUrl: string
+}
+
 export function BillingPage() {
   const user = useAuthStore((state) => state.user)
   const refreshMe = useAuthStore((state) => state.refreshMe)
@@ -25,6 +30,7 @@ export function BillingPage() {
   const [transactions, setTransactions] = useState<CreditTransaction[]>([])
   const [redemptions, setRedemptions] = useState<RedemptionHistoryItem[]>([])
   const [redemptionOpen, setRedemptionOpen] = useState(false)
+  const [paymentSession, setPaymentSession] = useState<PaymentSession | null>(null)
   const [loading, setLoading] = useState(false)
   const [redeeming, setRedeeming] = useState(false)
 
@@ -58,7 +64,7 @@ export function BillingPage() {
         payType: "alipay",
       })
       toast.success(`订单已创建，可到账 ${data.order.credits} credits`)
-      window.open(data.payUrl, "_blank", "noopener,noreferrer")
+      setPaymentSession({ order: data.order, payUrl: data.payUrl })
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -235,6 +241,36 @@ export function BillingPage() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!paymentSession}
+        onOpenChange={(open) => {
+          if (open) return
+          setPaymentSession(null)
+          void load()
+        }}
+      >
+        <DialogContent className="max-h-[96svh] max-w-[96vw] overflow-hidden sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>在线支付</DialogTitle>
+          </DialogHeader>
+          {paymentSession && (
+            <div className="flex max-h-[82vh] flex-col gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+                <span>订单 {paymentSession.order.outTradeNo}</span>
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary">{paymentSession.order.credits} credits</Badge>
+                  <Button variant="outline" onClick={() => window.open(paymentSession.payUrl, "_blank", "noopener,noreferrer")}>
+                    <ExternalLink data-icon="inline-start" />
+                    新窗口打开
+                  </Button>
+                </div>
+              </div>
+              <iframe title="在线支付" src={paymentSession.payUrl} className="h-[min(72vh,720px)] min-h-[520px] w-full rounded-lg border bg-background" />
             </div>
           )}
         </DialogContent>

@@ -43,10 +43,10 @@ function qualityLabel(value: string) {
   return qualityOptions.find((item) => item.value === value)?.label ?? value
 }
 
-function parseDimension(value: string, fallback: number) {
-  const next = Number(value)
-  if (!Number.isFinite(next)) return fallback
-  return Math.max(16, Math.floor(next))
+function parseDimensionInput(value: string) {
+  const next = Number(value.trim())
+  if (!Number.isFinite(next) || next <= 0) return null
+  return Math.floor(next)
 }
 
 export function GeneratePage() {
@@ -55,6 +55,9 @@ export function GeneratePage() {
   const [prompt, setPrompt] = useState("")
   const [width, setWidth] = useState(1024)
   const [height, setHeight] = useState(1024)
+  const [widthInput, setWidthInput] = useState("1024")
+  const [heightInput, setHeightInput] = useState("1024")
+  const [sizeDraftError, setSizeDraftError] = useState<string | null>(null)
   const [quality, setQuality] = useState("medium")
   const [pricing, setPricing] = useState<PricingRule[]>([])
   const [platform, setPlatform] = useState<PlatformSettings>({ maxResolutionBucket: "4k", allow4k: true })
@@ -90,10 +93,33 @@ export function GeneratePage() {
   }, [height, pricing, quality, width])
 
   const sizeError = useMemo(() => validateImageSize(width, height, platform.maxResolutionBucket), [height, platform.maxResolutionBucket, width])
-  const size = sizeString(width, height)
   const bucket = resolutionBucket(width, height)
   const maxEdge = platform.allow4k ? 3840 : 2048
   const maxHeight = platform.allow4k ? 2160 : 2048
+  const sizeDraftChanged = widthInput !== String(width) || heightInput !== String(height)
+
+  function confirmDimensions(showToast = false) {
+    const nextWidth = parseDimensionInput(widthInput)
+    const nextHeight = parseDimensionInput(heightInput)
+    if (nextWidth == null || nextHeight == null) {
+      const message = "请输入有效宽高"
+      setSizeDraftError(message)
+      if (showToast) toast.error(message)
+      return null
+    }
+    const error = validateImageSize(nextWidth, nextHeight, platform.maxResolutionBucket)
+    if (error) {
+      setSizeDraftError(error)
+      if (showToast) toast.error(error)
+      return null
+    }
+    setSizeDraftError(null)
+    setWidth(nextWidth)
+    setHeight(nextHeight)
+    setWidthInput(String(nextWidth))
+    setHeightInput(String(nextHeight))
+    return { width: nextWidth, height: nextHeight }
+  }
 
   useEffect(() => {
     if (!current || current.status === "COMPLETED" || current.status === "FAILED" || current.status === "EXPIRED") return
@@ -120,11 +146,13 @@ export function GeneratePage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (sizeError) {
-      toast.error(sizeError)
+    const dimensions = confirmDimensions(true)
+    if (!dimensions) {
       return
     }
-    if (cost == null) {
+    const nextBucket = resolutionBucket(dimensions.width, dimensions.height)
+    const nextCost = pricing.find((rule) => rule.model === "gpt-image-2" && rule.size === nextBucket && rule.quality === quality)?.credits
+    if (nextCost == null) {
       toast.error("当前尺寸和质量没有配置定价")
       return
     }
@@ -133,7 +161,7 @@ export function GeneratePage() {
       const form = new FormData()
       form.append("model", "gpt-image-2")
       form.append("prompt", prompt)
-      form.append("size", size)
+      form.append("size", sizeString(dimensions.width, dimensions.height))
       form.append("quality", quality)
       referenceImages.forEach((image) => form.append("referenceImages", image.file))
       const { data } = await api.post<{ image: ImageGeneration }>("/api/images/generate", form)
@@ -211,16 +239,52 @@ export function GeneratePage() {
                 <Field>
                   <FieldLabel>尺寸</FieldLabel>
                   <div className="grid grid-cols-2 gap-2">
-                    <Input aria-label="宽度" type="number" min={16} max={maxEdge} step={16} value={width} onChange={(event) => setWidth((current) => parseDimension(event.target.value, current))} />
-                    <Input aria-label="高度" type="number" min={16} max={maxHeight} step={16} value={height} onChange={(event) => setHeight((current) => parseDimension(event.target.value, current))} />
+                    <Input
+                      aria-label="宽度"
+                      type="number"
+                      min={16}
+                      max={maxEdge}
+                      step={16}
+                      value={widthInput}
+                      onBlur={() => confirmDimensions()}
+                      onChange={(event) => {
+                        setSizeDraftError(null)
+                        setWidthInput(event.target.value)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return
+                        event.preventDefault()
+                        confirmDimensions()
+                        event.currentTarget.blur()
+                      }}
+                    />
+                    <Input
+                      aria-label="高度"
+                      type="number"
+                      min={16}
+                      max={maxHeight}
+                      step={16}
+                      value={heightInput}
+                      onBlur={() => confirmDimensions()}
+                      onChange={(event) => {
+                        setSizeDraftError(null)
+                        setHeightInput(event.target.value)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return
+                        event.preventDefault()
+                        confirmDimensions()
+                        event.currentTarget.blur()
+                      }}
+                    />
                   </div>
-                  <FieldDescription>{sizeError ?? `当前按 ${bucket.toUpperCase()} 档计费`}</FieldDescription>
+                  {(sizeDraftError || !sizeDraftChanged) && <FieldDescription>{sizeDraftError ?? sizeError ?? `当前按 ${bucket.toUpperCase()} 档计费`}</FieldDescription>}
                 </Field>
                 <Field>
                   <FieldLabel>质量</FieldLabel>
                   <Select value={quality} onValueChange={(value) => setQuality(value ?? quality)}>
                     <SelectTrigger className="w-full">
-                      <SelectValue />
+                      <SelectValue>{qualityLabel(quality)}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
@@ -272,9 +336,9 @@ export function GeneratePage() {
               )}
               <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3">
                 <span className="text-sm text-muted-foreground">本次预扣</span>
-                <Badge variant="secondary">{cost ?? "-"} credits</Badge>
+                <Badge variant="secondary">{sizeDraftChanged ? "-" : (cost ?? "-")} credits</Badge>
               </div>
-              <Button disabled={submitting || busy || !prompt.trim() || !!sizeError || cost == null} type="submit">
+              <Button disabled={submitting || busy || !prompt.trim() || !!sizeDraftError || (!sizeDraftChanged && (!!sizeError || cost == null))} type="submit">
                 {submitting || busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Sparkles data-icon="inline-start" />}
                 {submitting ? "提交中" : busy ? "生成中" : "生成图片"}
               </Button>
