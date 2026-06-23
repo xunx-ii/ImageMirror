@@ -100,7 +100,10 @@ func (s *Service) Lookup(ctx context.Context, rawKey string) (string, string, er
 	cacheKey := "apikey:" + hash
 	cached, err := s.redis.HGetAll(ctx, cacheKey).Result()
 	if err == nil && cached["user_id"] != "" && cached["key_id"] != "" {
-		return cached["user_id"], cached["key_id"], nil
+		if active, err := s.userIsActive(ctx, cached["user_id"]); err == nil && active {
+			return cached["user_id"], cached["key_id"], nil
+		}
+		_ = s.redis.Del(ctx, cacheKey).Err()
 	}
 	var userID string
 	var keyID string
@@ -120,6 +123,18 @@ func (s *Service) Lookup(ctx context.Context, rawKey string) (string, string, er
 	_ = s.redis.HSet(ctx, cacheKey, map[string]any{"user_id": userID, "key_id": keyID}).Err()
 	_ = s.redis.Expire(ctx, cacheKey, 5*time.Minute).Err()
 	return userID, keyID, nil
+}
+
+func (s *Service) userIsActive(ctx context.Context, userID string) (bool, error) {
+	var status string
+	err := s.db.QueryRow(ctx, `SELECT status FROM users WHERE id=$1`, userID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return status == "ACTIVE", nil
 }
 
 func Hash(raw string) string {

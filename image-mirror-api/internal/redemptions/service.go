@@ -14,16 +14,18 @@ import (
 )
 
 type Code struct {
-	ID        string     `json:"id"`
-	Code      string     `json:"code"`
-	Credits   int64      `json:"credits"`
-	Status    string     `json:"status"`
-	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
-	UsedBy    *string    `json:"usedBy,omitempty"`
-	UsedAt    *time.Time `json:"usedAt,omitempty"`
-	CreatedBy *string    `json:"createdBy,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	ID             string     `json:"id"`
+	Code           string     `json:"code"`
+	Credits        int64      `json:"credits"`
+	Status         string     `json:"status"`
+	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
+	UsedBy         *string    `json:"usedBy,omitempty"`
+	UsedByEmail    *string    `json:"usedByEmail,omitempty"`
+	UsedAt         *time.Time `json:"usedAt,omitempty"`
+	CreatedBy      *string    `json:"createdBy,omitempty"`
+	CreatedByEmail *string    `json:"createdByEmail,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
 type HistoryItem struct {
@@ -73,9 +75,11 @@ func (s *Service) Generate(ctx context.Context, credits int64, count int, expire
 
 func (s *Service) List(ctx context.Context, limit int32, offset int32) ([]Code, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, code, credits, status, expires_at, used_by, used_at, created_by, created_at, updated_at
-		FROM redemption_codes
-		ORDER BY created_at DESC
+		SELECT rc.id, rc.code, rc.credits, rc.status, rc.expires_at, rc.used_by, used_user.email, rc.used_at, rc.created_by, created_user.email, rc.created_at, rc.updated_at
+		FROM redemption_codes rc
+		LEFT JOIN users used_user ON used_user.id=rc.used_by
+		LEFT JOIN users created_user ON created_user.id=rc.created_by
+		ORDER BY rc.created_at DESC
 		LIMIT $1 OFFSET $2
 	`, limit, offset)
 	if err != nil {
@@ -84,7 +88,7 @@ func (s *Service) List(ctx context.Context, limit int32, offset int32) ([]Code, 
 	defer rows.Close()
 	out := make([]Code, 0)
 	for rows.Next() {
-		item, err := scanCode(rows)
+		item, err := scanCodeWithUsers(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -207,6 +211,22 @@ func scanCode(row pgx.Row) (Code, error) {
 	var expiresAt pgtype.Timestamptz
 	var usedAt pgtype.Timestamptz
 	if err := row.Scan(&item.ID, &item.Code, &item.Credits, &item.Status, &expiresAt, &item.UsedBy, &usedAt, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		return Code{}, err
+	}
+	if expiresAt.Valid {
+		item.ExpiresAt = &expiresAt.Time
+	}
+	if usedAt.Valid {
+		item.UsedAt = &usedAt.Time
+	}
+	return item, nil
+}
+
+func scanCodeWithUsers(row pgx.Row) (Code, error) {
+	var item Code
+	var expiresAt pgtype.Timestamptz
+	var usedAt pgtype.Timestamptz
+	if err := row.Scan(&item.ID, &item.Code, &item.Credits, &item.Status, &expiresAt, &item.UsedBy, &item.UsedByEmail, &usedAt, &item.CreatedBy, &item.CreatedByEmail, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return Code{}, err
 	}
 	if expiresAt.Valid {

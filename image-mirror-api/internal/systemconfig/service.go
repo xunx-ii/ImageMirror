@@ -170,6 +170,9 @@ func (s *Service) UpdateEPay(ctx context.Context, settings EPaySettings, apiKey 
 	if settings.CreditsPerYuan <= 0 {
 		settings.CreditsPerYuan = 100
 	}
+	if settings.CreditsPerYuan > 1_000_000 {
+		return EPaySettings{}, errors.New("creditsPerYuan is too large")
+	}
 	values := map[string]string{
 		KeyEPayGateway: settings.Gateway,
 		KeyEPayPID:     settings.PID,

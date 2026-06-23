@@ -33,6 +33,7 @@ const links = [
 export function AppLayout() {
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
+  const tokens = useAuthStore((state) => state.tokens)
   const logout = useAuthStore((state) => state.logout)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
   const [announcementOpen, setAnnouncementOpen] = useState(false)
@@ -42,13 +43,17 @@ export function AppLayout() {
       .get<SiteContent>("/api/content/announcement")
       .then((response) => {
         setAnnouncement(response.data)
-        if (response.data.body.trim()) setAnnouncementOpen(true)
+        if (!response.data.body.trim() || !user?.id || !tokens?.accessToken) return
+        const sessionKey = `image-mirror-announcement:${user.id}:${tokens.accessToken.slice(-16)}`
+        if (sessionStorage.getItem(sessionKey)) return
+        sessionStorage.setItem(sessionKey, "1")
+        setAnnouncementOpen(true)
       })
       .catch((error) => {
         const status = (error as { response?: { status?: number } }).response?.status
         if (status !== 404) toast.error(errorMessage(error))
       })
-  }, [user?.id])
+  }, [tokens?.accessToken, user?.id])
 
   return (
     <div className="min-h-svh bg-background text-foreground">

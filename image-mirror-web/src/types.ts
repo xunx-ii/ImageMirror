@@ -114,8 +114,10 @@ export type RedemptionCode = {
   status: "ACTIVE" | "USED" | "DISABLED" | "EXPIRED"
   expiresAt?: string
   usedBy?: string
+  usedByEmail?: string
   usedAt?: string
   createdBy?: string
+  createdByEmail?: string
   createdAt: string
   updatedAt: string
 }

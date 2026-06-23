@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -35,6 +37,53 @@ func (s *Service) AdjustBalance(ctx context.Context, userID string, amount int64
 		description = "admin adjustment"
 	}
 	return s.billing.AdminAdjust(ctx, userID, amount, description)
+}
+
+func (s *Service) SetUserStatus(ctx context.Context, actorID string, targetID string, status string) (users.User, error) {
+	status = strings.ToUpper(strings.TrimSpace(status))
+	if status != "ACTIVE" && status != "SUSPENDED" {
+		return users.User{}, errors.New("unsupported user status")
+	}
+	if actorID == targetID && status == "SUSPENDED" {
+		return users.User{}, errors.New("cannot suspend your own account")
+	}
+	target, err := s.users.FindByID(ctx, targetID)
+	if err != nil {
+		return users.User{}, err
+	}
+	if target.Role == "ADMIN" && status == "SUSPENDED" {
+		if err := s.ensureAnotherActiveAdmin(ctx, target.ID); err != nil {
+			return users.User{}, err
+		}
+	}
+	return s.users.UpdateStatus(ctx, targetID, status)
+}
+
+func (s *Service) DeleteUser(ctx context.Context, actorID string, targetID string) error {
+	if actorID == targetID {
+		return errors.New("cannot delete your own account")
+	}
+	target, err := s.users.FindByID(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if target.Role == "ADMIN" {
+		if err := s.ensureAnotherActiveAdmin(ctx, target.ID); err != nil {
+			return err
+		}
+	}
+	return s.users.Delete(ctx, targetID)
+}
+
+func (s *Service) ensureAnotherActiveAdmin(ctx context.Context, targetID string) error {
+	count, err := s.users.CountActiveAdminsExcept(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return errors.New("at least one active admin is required")
+	}
+	return nil
 }
 
 func (s *Service) Overview(ctx context.Context) (Overview, error) {

@@ -45,6 +45,10 @@ func JWTAuth(authService *auth.Service) gin.HandlerFunc {
 			Abort(c, ErrUnauthorized)
 			return
 		}
+		if err := authService.EnsureActive(c.Request.Context(), claims.UserID); err != nil {
+			Abort(c, ErrUnauthorized)
+			return
+		}
 		c.Set(ContextUserID, claims.UserID)
 		c.Set(ContextUserRole, claims.Role)
 		c.Next()

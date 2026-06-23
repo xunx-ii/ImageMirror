@@ -75,6 +75,37 @@ func (r *Repository) UpdateLoginAt(ctx context.Context, id string) error {
 	return err
 }
 
+func (r *Repository) UpdateStatus(ctx context.Context, id string, status string) (User, error) {
+	row := r.db.QueryRow(ctx, `
+		UPDATE users
+		SET status=$2, updated_at=now()
+		WHERE id=$1
+		RETURNING id, email, role, status, balance, last_login_at, created_at, updated_at, password_hash
+	`, id, status)
+	return scanUser(row)
+}
+
+func (r *Repository) Delete(ctx context.Context, id string) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM users WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+func (r *Repository) CountActiveAdminsExcept(ctx context.Context, exceptID string) (int64, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM users
+		WHERE role='ADMIN' AND status='ACTIVE' AND id<>$1
+	`, exceptID).Scan(&count)
+	return count, err
+}
+
 func scanUser(row pgx.Row) (User, error) {
 	var user User
 	var lastLoginAt pgtype.Timestamptz

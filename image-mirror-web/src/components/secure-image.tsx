@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import type { CSSProperties } from "react"
 
 import { api } from "@/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -7,9 +8,10 @@ type SecureImageProps = {
   imageId: string
   alt: string
   className?: string
+  style?: CSSProperties
 }
 
-export function SecureImage({ imageId, alt, className }: SecureImageProps) {
+export function SecureImage({ imageId, alt, className, style }: SecureImageProps) {
   const [state, setState] = useState<{
     imageId: string
     url: string | null
@@ -53,5 +55,5 @@ export function SecureImage({ imageId, alt, className }: SecureImageProps) {
     return <Skeleton className="aspect-square w-full rounded-lg" />
   }
 
-  return <img src={state.url} alt={alt} className={className} />
+  return <img src={state.url} alt={alt} className={className} style={style} />
 }

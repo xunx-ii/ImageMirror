@@ -34,11 +34,13 @@ import { Textarea } from "@/components/ui/textarea"
 import { formatDate } from "@/lib/format"
 import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
+import { useAuthStore } from "@/stores/auth"
 import type { AdminOverview, ContentAsset, EPaySettings, OpenAISettings, PricingRule, RedemptionCode, SiteContent, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
 
 export function AdminPage() {
+  const currentUser = useAuthStore((state) => state.user)
   const [overview, setOverview] = useState<AdminOverview | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [pricing, setPricing] = useState<PricingRule[]>([])
@@ -307,6 +309,29 @@ export function AdminPage() {
     }
   }
 
+  async function updateUserStatus(user: User, status: "ACTIVE" | "SUSPENDED") {
+    try {
+      const { data } = await api.put<{ user: User }>(`/api/admin/users/${user.id}/status`, { status })
+      setUsers((state) => state.map((item) => (item.id === user.id ? data.user : item)))
+      toast.success(status === "ACTIVE" ? "用户已启用" : "用户已停用")
+      await load()
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  async function deleteUser(user: User) {
+    if (!window.confirm(`确认删除用户 ${user.email}？`)) return
+    try {
+      await api.delete(`/api/admin/users/${user.id}`)
+      toast.success("用户已删除")
+      setUsers((state) => state.filter((item) => item.id !== user.id))
+      await load()
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
   function editPricing(rule: PricingRule) {
     setEditingPricingId(rule.id)
     setModel(rule.model)
@@ -399,40 +424,66 @@ export function AdminPage() {
                   <TableRow>
                     <TableHead>邮箱</TableHead>
                     <TableHead>角色</TableHead>
+                    <TableHead>状态</TableHead>
                     <TableHead>余额</TableHead>
                     <TableHead>注册时间</TableHead>
                     <TableHead>调整</TableHead>
+                    <TableHead>操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {users.map((user) => (
-                    <TableRow key={user.id}>
-                      <TableCell>{user.email}</TableCell>
-                      <TableCell>
-                        <Badge variant={user.role === "ADMIN" ? "secondary" : "outline"}>{user.role}</Badge>
-                      </TableCell>
-                      <TableCell className="tabular-nums">{user.balance}</TableCell>
-                      <TableCell>{formatDate(user.createdAt)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Input
-                            className="w-28"
-                            type="number"
-                            value={adjustments[user.id] ?? 0}
-                            onChange={(event) =>
-                              setAdjustments((state) => ({
-                                ...state,
-                                [user.id]: Number(event.target.value),
-                              }))
-                            }
-                          />
-                          <Button variant="outline" onClick={() => void adjustBalance(user.id)}>
-                            保存
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {users.map((user) => {
+                    const isSelf = currentUser?.id === user.id
+                    return (
+                      <TableRow key={user.id}>
+                        <TableCell>{user.email}</TableCell>
+                        <TableCell>
+                          <Badge variant={user.role === "ADMIN" ? "secondary" : "outline"}>{user.role}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={user.status === "ACTIVE" ? "secondary" : "destructive"}>{user.status}</Badge>
+                        </TableCell>
+                        <TableCell className="tabular-nums">{user.balance}</TableCell>
+                        <TableCell>{formatDate(user.createdAt)}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              className="w-28"
+                              type="number"
+                              value={adjustments[user.id] ?? 0}
+                              onChange={(event) =>
+                                setAdjustments((state) => ({
+                                  ...state,
+                                  [user.id]: Number(event.target.value),
+                                }))
+                              }
+                            />
+                            <Button variant="outline" onClick={() => void adjustBalance(user.id)}>
+                              保存
+                            </Button>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-2">
+                            {user.status === "ACTIVE" ? (
+                              <Button variant="outline" disabled={isSelf} onClick={() => void updateUserStatus(user, "SUSPENDED")}>
+                                <Ban data-icon="inline-start" />
+                                停用
+                              </Button>
+                            ) : (
+                              <Button variant="outline" onClick={() => void updateUserStatus(user, "ACTIVE")}>
+                                启用
+                              </Button>
+                            )}
+                            <Button variant="outline" disabled={isSelf} onClick={() => void deleteUser(user)}>
+                              <Trash2 data-icon="inline-start" />
+                              删除
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
@@ -612,7 +663,8 @@ export function AdminPage() {
                     <TableHead>额度</TableHead>
                     <TableHead>状态</TableHead>
                     <TableHead>过期</TableHead>
-                    <TableHead>使用</TableHead>
+                    <TableHead>使用者</TableHead>
+                    <TableHead>使用时间</TableHead>
                     <TableHead>创建</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -634,6 +686,7 @@ export function AdminPage() {
                         <Badge variant={code.status === "ACTIVE" ? "secondary" : code.status === "USED" ? "outline" : "destructive"}>{code.status}</Badge>
                       </TableCell>
                       <TableCell>{formatDate(code.expiresAt)}</TableCell>
+                      <TableCell>{code.usedByEmail || "-"}</TableCell>
                       <TableCell>{formatDate(code.usedAt)}</TableCell>
                       <TableCell>{formatDate(code.createdAt)}</TableCell>
                     </TableRow>

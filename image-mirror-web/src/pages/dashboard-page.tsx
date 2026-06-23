@@ -3,6 +3,7 @@ import { BadgeCent, GalleryHorizontalEnd, ImagePlus, KeyRound, RefreshCw } from 
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
+import { ImageViewerDialog } from "@/components/image-viewer-dialog"
 import { PageHeader } from "@/components/page-header"
 import { SecureImage } from "@/components/secure-image"
 import { Badge } from "@/components/ui/badge"
@@ -19,6 +20,7 @@ export function DashboardPage() {
   const refreshMe = useAuthStore((state) => state.refreshMe)
   const [images, setImages] = useState<ImageGeneration[]>([])
   const [keys, setKeys] = useState<ApiKey[]>([])
+  const [viewer, setViewer] = useState<ImageGeneration | null>(null)
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
@@ -80,7 +82,9 @@ export function DashboardPage() {
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {completed.map((image) => (
                 <div key={image.id} className="flex flex-col gap-2 rounded-lg border p-2">
-                  <SecureImage imageId={image.id} alt={image.prompt} className="aspect-square rounded-md object-cover" />
+                  <button type="button" className="text-left" onClick={() => setViewer(image)}>
+                    <SecureImage imageId={image.id} alt={image.prompt} className="aspect-square rounded-md object-cover" />
+                  </button>
                   <div className="flex items-center justify-between gap-2">
                     <div className="truncate text-sm">{image.prompt}</div>
                     <Badge variant="secondary">{formatDate(image.createdAt)}</Badge>
@@ -101,6 +105,7 @@ export function DashboardPage() {
           )}
         </CardContent>
       </Card>
+      <ImageViewerDialog image={viewer} open={!!viewer} onOpenChange={(open) => !open && setViewer(null)} />
     </>
   )
 }

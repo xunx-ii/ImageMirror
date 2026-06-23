@@ -58,6 +58,9 @@ func (s *Service) CreateEPayOrder(ctx context.Context, userID string, amountCent
 	if amountCents <= 0 {
 		return CreateOrderResult{}, errors.New("amount must be positive")
 	}
+	if amountCents > 100_000_000 {
+		return CreateOrderResult{}, errors.New("amount is too large")
+	}
 	settings, key, err := s.configStore.GetEPay(ctx)
 	if err != nil {
 		return CreateOrderResult{}, err
@@ -68,8 +71,9 @@ func (s *Service) CreateEPayOrder(ctx context.Context, userID string, amountCent
 	if settings.PID == "" || key == "" {
 		return CreateOrderResult{}, errors.New("epay merchant config is incomplete")
 	}
-	if payType == "" {
-		payType = "alipay"
+	payType, err = normalizePayType(payType)
+	if err != nil {
+		return CreateOrderResult{}, err
 	}
 	credits := amountCents * settings.CreditsPerYuan / 100
 	if credits <= 0 {
@@ -109,29 +113,39 @@ func (s *Service) HandleEPayNotify(ctx context.Context, values url.Values) (Noti
 	if err != nil {
 		return NotifyResult{}, err
 	}
-	if !settings.Enabled || key == "" {
-		return NotifyResult{}, errors.New("payment is not enabled")
+	if settings.PID == "" || key == "" {
+		return NotifyResult{}, errors.New("epay merchant config is incomplete")
 	}
 	if !verify(values, key) {
 		return NotifyResult{}, errors.New("invalid signature")
 	}
-	outTradeNo := values.Get("out_trade_no")
+	if strings.TrimSpace(values.Get("pid")) != settings.PID {
+		return NotifyResult{}, errors.New("invalid merchant id")
+	}
+	outTradeNo := strings.TrimSpace(values.Get("out_trade_no"))
 	if outTradeNo == "" {
 		return NotifyResult{}, errors.New("missing out_trade_no")
 	}
-	tradeStatus := strings.ToUpper(values.Get("trade_status"))
-	if tradeStatus != "" && tradeStatus != "TRADE_SUCCESS" {
+	tradeStatus := strings.ToUpper(strings.TrimSpace(values.Get("trade_status")))
+	if tradeStatus != "TRADE_SUCCESS" {
 		return NotifyResult{OutTradeNo: outTradeNo, Status: "ignored"}, nil
 	}
-	providerTradeNo := values.Get("trade_no")
-	order, err := s.markPaid(ctx, outTradeNo, providerTradeNo)
+	providerTradeNo := strings.TrimSpace(values.Get("trade_no"))
+	if providerTradeNo == "" {
+		return NotifyResult{}, errors.New("missing trade_no")
+	}
+	amountCents, err := parseMoneyCents(values.Get("money"))
+	if err != nil {
+		return NotifyResult{}, err
+	}
+	order, err := s.markPaid(ctx, outTradeNo, providerTradeNo, amountCents)
 	if err != nil {
 		return NotifyResult{}, err
 	}
 	return NotifyResult{OutTradeNo: order.OutTradeNo, Status: order.Status}, nil
 }
 
-func (s *Service) markPaid(ctx context.Context, outTradeNo string, providerTradeNo string) (Order, error) {
+func (s *Service) markPaid(ctx context.Context, outTradeNo string, providerTradeNo string, expectedAmountCents int64) (Order, error) {
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Order{}, err
@@ -146,6 +160,9 @@ func (s *Service) markPaid(ctx context.Context, outTradeNo string, providerTrade
 	order, err := scanOrder(row)
 	if err != nil {
 		return Order{}, err
+	}
+	if order.AmountCents != expectedAmountCents {
+		return Order{}, errors.New("payment amount does not match order")
 	}
 	if order.Status != "PAID" {
 		var tradeNo *string
@@ -225,4 +242,56 @@ func verify(values url.Values, key string) bool {
 
 func formatMoney(cents int64) string {
 	return strconv.FormatFloat(float64(cents)/100, 'f', 2, 64)
+}
+
+func normalizePayType(payType string) (string, error) {
+	payType = strings.ToLower(strings.TrimSpace(payType))
+	if payType == "" {
+		return "alipay", nil
+	}
+	switch payType {
+	case "alipay", "wxpay", "qqpay":
+		return payType, nil
+	default:
+		return "", errors.New("unsupported payment type")
+	}
+}
+
+func parseMoneyCents(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, errors.New("missing money")
+	}
+	parts := strings.Split(raw, ".")
+	if len(parts) > 2 || parts[0] == "" {
+		return 0, errors.New("invalid money")
+	}
+	whole, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || whole < 0 {
+		return 0, errors.New("invalid money")
+	}
+	if whole > 1_000_000_000_000 {
+		return 0, errors.New("invalid money")
+	}
+	cents := whole * 100
+	if len(parts) == 1 {
+		return cents, nil
+	}
+	fraction := parts[1]
+	if len(fraction) > 2 {
+		for _, ch := range fraction[2:] {
+			if ch != '0' {
+				return 0, errors.New("invalid money")
+			}
+		}
+		fraction = fraction[:2]
+	}
+	for len(fraction) < 2 {
+		fraction += "0"
+	}
+	fractionCents, err := strconv.ParseInt(fraction, 10, 64)
+	if err != nil {
+		return 0, errors.New("invalid money")
+	}
+	return cents + fractionCents, nil
 }

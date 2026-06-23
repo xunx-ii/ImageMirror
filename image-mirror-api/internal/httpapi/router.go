@@ -87,6 +87,8 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.Use(JWTAuth(s.Auth), AdminOnly())
 	adminGroup.GET("/users", adminListUsersHandler(s.Admin))
 	adminGroup.POST("/users/:id/adjust-balance", adminAdjustBalanceHandler(s.Admin))
+	adminGroup.PUT("/users/:id/status", adminUpdateUserStatusHandler(s.Admin))
+	adminGroup.DELETE("/users/:id", adminDeleteUserHandler(s.Admin))
 	adminGroup.GET("/pricing", pricingHandler(s.Pricing))
 	adminGroup.POST("/pricing", upsertPricingHandler(s.Pricing))
 	adminGroup.PUT("/pricing/:id", updatePricingHandler(s.Pricing))
@@ -229,6 +231,10 @@ func createEPayOrderHandler(paymentSvc *payments.Service) gin.HandlerFunc {
 		}
 		if err := c.ShouldBindJSON(&req); err != nil || req.Amount <= 0 {
 			Abort(c, NewError(http.StatusBadRequest, "amount must be positive", err))
+			return
+		}
+		if req.Amount > 1_000_000 {
+			Abort(c, NewError(http.StatusBadRequest, "amount is too large", nil))
 			return
 		}
 		result, err := paymentSvc.CreateEPayOrder(c.Request.Context(), CurrentUserID(c), req.Amount*100, req.PayType)
@@ -823,6 +829,34 @@ func adminAdjustBalanceHandler(adminSvc *admin.Service) gin.HandlerFunc {
 		}
 		if err := adminSvc.AdjustBalance(c.Request.Context(), c.Param("id"), req.Amount, req.Description); err != nil {
 			Abort(c, err)
+			return
+		}
+		OK(c, gin.H{"ok": true})
+	}
+}
+
+func adminUpdateUserStatusHandler(adminSvc *admin.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Status string `json:"status"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Status) == "" {
+			Abort(c, NewError(http.StatusBadRequest, "status is required", err))
+			return
+		}
+		user, err := adminSvc.SetUserStatus(c.Request.Context(), CurrentUserID(c), c.Param("id"), req.Status)
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		OK(c, gin.H{"user": user})
+	}
+}
+
+func adminDeleteUserHandler(adminSvc *admin.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := adminSvc.DeleteUser(c.Request.Context(), CurrentUserID(c), c.Param("id")); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
 			return
 		}
 		OK(c, gin.H{"ok": true})

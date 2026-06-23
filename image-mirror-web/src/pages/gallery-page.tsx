@@ -3,6 +3,7 @@ import { Check, Download, Eye, GalleryHorizontalEnd, RefreshCw, Trash2 } from "l
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
+import { ImageViewerDialog } from "@/components/image-viewer-dialog"
 import { PageHeader } from "@/components/page-header"
 import { SecureImage } from "@/components/secure-image"
 import { Badge } from "@/components/ui/badge"
@@ -18,7 +19,9 @@ import type { ImageGeneration } from "@/types"
 export function GalleryPage() {
   const [images, setImages] = useState<ImageGeneration[]>([])
   const [selected, setSelected] = useState<string[]>([])
+  const [selectionMode, setSelectionMode] = useState(false)
   const [detail, setDetail] = useState<ImageGeneration | null>(null)
+  const [viewer, setViewer] = useState<ImageGeneration | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
 
@@ -65,6 +68,7 @@ export function GalleryPage() {
       toast.success(`已删除 ${ids.length} 张图片`)
       setSelected((state) => state.filter((id) => !ids.includes(id)))
       setDetail((state) => (state && ids.includes(state.id) ? null : state))
+      setViewer((state) => (state && ids.includes(state.id) ? null : state))
       await load()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -86,27 +90,53 @@ export function GalleryPage() {
     }
   }
 
+  function exitSelectionMode() {
+    setSelectionMode(false)
+    setSelected([])
+  }
+
+  function openImage(image: ImageGeneration) {
+    if (selectionMode) {
+      toggleSelected(image.id)
+      return
+    }
+    if (image.status === "COMPLETED") {
+      setViewer(image)
+      return
+    }
+    setDetail(image)
+  }
+
   return (
     <>
       <PageHeader
         title="我的图片"
         action={
           <div className="flex flex-wrap gap-2">
-            {images.length > 0 && (
+            {images.length > 0 && !selectionMode && (
+              <Button variant="outline" onClick={() => setSelectionMode(true)}>
+                <Check data-icon="inline-start" />
+                多选
+              </Button>
+            )}
+            {selectionMode && images.length > 0 && (
               <Button variant="outline" onClick={toggleAll}>
                 <Check data-icon="inline-start" />
                 {allSelected ? "取消全选" : "全选"}
               </Button>
             )}
-            {selected.length > 0 && (
+            {selectionMode && (
               <>
                 <Button variant="outline" disabled={busy || completedSelected.length === 0} onClick={() => void downloadSelected()}>
                   <Download data-icon="inline-start" />
                   下载 {completedSelected.length}
                 </Button>
-                <Button variant="outline" disabled={busy} onClick={() => void deleteImages(selected)}>
+                <Button variant="outline" disabled={busy || selected.length === 0} onClick={() => void deleteImages(selected)}>
                   <Trash2 data-icon="inline-start" />
                   删除 {selected.length}
+                </Button>
+                <Button variant="outline" onClick={exitSelectionMode}>
+                  退出多选
                 </Button>
               </>
             )}
@@ -138,9 +168,9 @@ export function GalleryPage() {
           {images.map((image) => {
             const isSelected = selected.includes(image.id)
             return (
-              <Card key={image.id} className={cn(isSelected && "ring-2 ring-ring")}>
+              <Card key={image.id} className={cn(selectionMode && isSelected && "ring-2 ring-ring")}>
                 <CardContent className="flex flex-col gap-3 p-3">
-                  <button type="button" className="relative text-left" onClick={() => toggleSelected(image.id)}>
+                  <button type="button" className="relative text-left" onClick={() => openImage(image)}>
                     {image.status === "COMPLETED" ? (
                       <SecureImage imageId={image.id} alt={image.prompt} className="aspect-square rounded-lg object-cover" />
                     ) : (
@@ -148,9 +178,11 @@ export function GalleryPage() {
                         {image.status}
                       </div>
                     )}
-                    <span className={cn("absolute right-2 top-2 flex size-7 items-center justify-center rounded-md border bg-background", isSelected ? "opacity-100" : "opacity-70")}>
-                      {isSelected && <Check />}
-                    </span>
+                    {selectionMode && (
+                      <span className={cn("absolute right-2 top-2 flex size-7 items-center justify-center rounded-md border bg-background", isSelected ? "opacity-100" : "opacity-70")}>
+                        {isSelected && <Check />}
+                      </span>
+                    )}
                   </button>
                   <div className="flex flex-col gap-2">
                     <div className="line-clamp-2 min-h-10 text-sm">{image.prompt}</div>
@@ -228,6 +260,8 @@ export function GalleryPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <ImageViewerDialog image={viewer} open={!!viewer} onOpenChange={(open) => !open && setViewer(null)} />
     </>
   )
 }

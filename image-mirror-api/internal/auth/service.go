@@ -92,6 +92,17 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 	return s.issueTokens(ctx, user)
 }
 
+func (s *Service) EnsureActive(ctx context.Context, userID string) error {
+	user, err := s.users.FindByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.Status != "ACTIVE" {
+		return errors.New("account is suspended")
+	}
+	return nil
+}
+
 func (s *Service) ParseAccessToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
