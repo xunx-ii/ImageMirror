@@ -38,6 +38,11 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     imageKeyRef.current = imageKey
   }, [activeView.scale, activeView.x, activeView.y, imageKey])
 
+  function setView(next: { imageKey: string; scale: number; x: number; y: number }) {
+    viewRef.current = { scale: next.scale, x: next.x, y: next.y }
+    setViewState(next)
+  }
+
   const zoomAt = useCallback((delta: number, origin?: { clientX: number; clientY: number }) => {
     const node = viewportRef.current
     const previous = viewRef.current
@@ -45,7 +50,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     if (nextScale === previous.scale) return
 
     if (!origin || !node || nextScale <= 1) {
-      setViewState({ imageKey: imageKeyRef.current, scale: nextScale, x: 0, y: 0 })
+      setView({ imageKey: imageKeyRef.current, scale: nextScale, x: 0, y: 0 })
       return
     }
 
@@ -54,7 +59,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     const originY = origin.clientY - rect.top - rect.height / 2
     const ratio = nextScale / previous.scale
 
-    setViewState({
+    setView({
       imageKey: imageKeyRef.current,
       scale: nextScale,
       x: previous.x * ratio + originX * (1 - ratio),
@@ -63,17 +68,18 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
   }, [])
 
   useEffect(() => {
-    const node = viewportRef.current
-    if (!node || !canView) return
+    if (!canView) return
 
     function handleNativeWheel(event: WheelEvent) {
+      const node = viewportRef.current
+      if (!node || !(event.target instanceof Node) || !node.contains(event.target)) return
       event.preventDefault()
       event.stopPropagation()
       zoomAt(event.deltaY < 0 ? 0.1 : -0.1, event)
     }
 
-    node.addEventListener("wheel", handleNativeWheel, { passive: false, capture: true })
-    return () => node.removeEventListener("wheel", handleNativeWheel, { capture: true })
+    document.addEventListener("wheel", handleNativeWheel, { passive: false, capture: true })
+    return () => document.removeEventListener("wheel", handleNativeWheel, { capture: true })
   }, [canView, zoomAt])
 
   function zoom(delta: number) {
@@ -83,7 +89,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
   }
 
   function resetScale() {
-    setViewState({ imageKey, scale: 1, x: 0, y: 0 })
+    setView({ imageKey, scale: 1, x: 0, y: 0 })
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -109,7 +115,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     if (!node || !drag || drag.pointerId !== event.pointerId) return
 
     event.preventDefault()
-    setViewState({
+    setView({
       imageKey: imageKeyRef.current,
       scale: viewRef.current.scale,
       x: drag.translateX + event.clientX - drag.x,
