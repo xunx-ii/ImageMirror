@@ -106,3 +106,38 @@ export type PaymentOrder = {
   createdAt: string
   updatedAt: string
 }
+
+export type RedemptionCode = {
+  id: string
+  code: string
+  credits: number
+  status: "ACTIVE" | "USED" | "DISABLED" | "EXPIRED"
+  expiresAt?: string
+  usedBy?: string
+  usedAt?: string
+  createdBy?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type RedemptionHistoryItem = {
+  code: string
+  credits: number
+  redeemedAt: string
+}
+
+export type SiteContent = {
+  key: "docs" | "announcement"
+  title: string
+  body: string
+  isActive: boolean
+  updatedAt: string
+}
+
+export type ContentAsset = {
+  id: string
+  kind: string
+  filename: string
+  url: string
+  createdAt: string
+}

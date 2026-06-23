@@ -87,7 +87,6 @@ export function GalleryPage() {
     <>
       <PageHeader
         title="我的图片"
-        description="图片保留 24 小时，到期后 worker 会删除本地文件。"
         action={
           <div className="flex flex-wrap gap-2">
             {images.length > 0 && (

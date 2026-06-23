@@ -123,7 +123,7 @@ export function GeneratePage() {
 
   return (
     <>
-      <PageHeader title="生成工作台" description="提交 gpt-image-2 任务，平台会预扣积分并在失败时自动退款。" />
+      <PageHeader title="生成工作台" />
       <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
         <Card>
           <CardHeader>

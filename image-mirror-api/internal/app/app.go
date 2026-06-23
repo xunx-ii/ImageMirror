@@ -14,6 +14,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/auth"
 	"github.com/linxunxi/image-mirror/internal/billing"
 	"github.com/linxunxi/image-mirror/internal/config"
+	"github.com/linxunxi/image-mirror/internal/content"
 	"github.com/linxunxi/image-mirror/internal/database"
 	"github.com/linxunxi/image-mirror/internal/httpapi"
 	"github.com/linxunxi/image-mirror/internal/images"
@@ -21,6 +22,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/payments"
 	"github.com/linxunxi/image-mirror/internal/pricing"
 	"github.com/linxunxi/image-mirror/internal/queue"
+	"github.com/linxunxi/image-mirror/internal/redemptions"
 	"github.com/linxunxi/image-mirror/internal/storage"
 	"github.com/linxunxi/image-mirror/internal/systemconfig"
 	"github.com/linxunxi/image-mirror/internal/users"
@@ -71,6 +73,8 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 	})
 	imagesSvc := images.NewService(cfg, db, pricingSvc, billingSvc, storageSvc, openAIClient)
 	paymentSvc := payments.NewService(db, systemConfigSvc, cfg.PublicBaseURL)
+	redemptionSvc := redemptions.NewService(db)
+	contentSvc := content.NewService(db, storageSvc)
 	queueClient := queue.NewClient(redisOpt)
 	adminSvc := admin.NewService(db, usersRepo, billingSvc)
 
@@ -83,6 +87,8 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 		Pricing:     pricingSvc,
 		Images:      imagesSvc,
 		Payments:    paymentSvc,
+		Redemptions: redemptionSvc,
+		Content:     contentSvc,
 		Queue:       queueClient,
 		Admin:       adminSvc,
 		ConfigStore: systemConfigSvc,

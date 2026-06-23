@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import type { FormEvent } from "react"
-import { BadgeCent, RefreshCw } from "lucide-react"
+import { BadgeCent, Gift, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
@@ -14,19 +14,26 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDate } from "@/lib/format"
 import { useAuthStore } from "@/stores/auth"
-import type { CreditTransaction, PaymentOrder } from "@/types"
+import type { CreditTransaction, PaymentOrder, RedemptionHistoryItem } from "@/types"
 
 export function BillingPage() {
   const user = useAuthStore((state) => state.user)
   const refreshMe = useAuthStore((state) => state.refreshMe)
   const [amount, setAmount] = useState(100)
+  const [redeemCode, setRedeemCode] = useState("")
   const [transactions, setTransactions] = useState<CreditTransaction[]>([])
+  const [redemptions, setRedemptions] = useState<RedemptionHistoryItem[]>([])
   const [loading, setLoading] = useState(false)
+  const [redeeming, setRedeeming] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const { data } = await api.get<{ data: CreditTransaction[] }>("/api/billing/transactions?limit=100")
-      setTransactions(data.data ?? [])
+      const [txResponse, redemptionResponse] = await Promise.all([
+        api.get<{ data: CreditTransaction[] }>("/api/billing/transactions?limit=100"),
+        api.get<{ data: RedemptionHistoryItem[] }>("/api/billing/redemptions?limit=100"),
+      ])
+      setTransactions(txResponse.data.data ?? [])
+      setRedemptions(redemptionResponse.data.data ?? [])
       await refreshMe()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -57,11 +64,25 @@ export function BillingPage() {
     }
   }
 
+  async function redeem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setRedeeming(true)
+    try {
+      const { data } = await api.post<{ code: { credits: number } }>("/api/billing/redeem", { code: redeemCode })
+      toast.success(`兑换成功，到账 ${data.code.credits} credits`)
+      setRedeemCode("")
+      await load()
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setRedeeming(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="账单"
-        description="预付积分会在提交生成任务时扣减，失败任务自动退款。"
         action={
           <Button variant="outline" onClick={load}>
             <RefreshCw data-icon="inline-start" />
@@ -69,8 +90,9 @@ export function BillingPage() {
           </Button>
         }
       />
-      <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
-        <Card>
+      <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
+        <div className="flex flex-col gap-4">
+          <Card>
           <CardHeader>
             <CardTitle>在线充值</CardTitle>
             <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
@@ -97,25 +119,87 @@ export function BillingPage() {
               </Button>
             </form>
           </CardContent>
-        </Card>
+          </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>交易记录</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {transactions.length === 0 ? (
-              <Empty>
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <BadgeCent />
-                  </EmptyMedia>
-                  <EmptyTitle>暂无交易</EmptyTitle>
-                  <EmptyDescription>充值、扣费和退款会记录在这里。</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              <Table>
+          <Card>
+            <CardHeader>
+              <CardTitle>兑换码</CardTitle>
+              <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-5" onSubmit={redeem}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="redeem-code">兑换码</FieldLabel>
+                    <Input id="redeem-code" value={redeemCode} onChange={(event) => setRedeemCode(event.target.value.toUpperCase())} required />
+                    <FieldDescription>输入管理员发放的兑换码后立即到账。</FieldDescription>
+                  </Field>
+                </FieldGroup>
+                <Button disabled={redeeming || !redeemCode.trim()} type="submit">
+                  <Gift data-icon="inline-start" />
+                  {redeeming ? "兑换中" : "兑换"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>兑换记录</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {redemptions.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <Gift />
+                    </EmptyMedia>
+                    <EmptyTitle>暂无兑换</EmptyTitle>
+                    <EmptyDescription>兑换码使用记录会显示在这里。</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>兑换码</TableHead>
+                      <TableHead>积分</TableHead>
+                      <TableHead>时间</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {redemptions.map((item) => (
+                      <TableRow key={`${item.code}-${item.redeemedAt}`}>
+                        <TableCell className="font-mono text-xs">{item.code}</TableCell>
+                        <TableCell className="tabular-nums">{item.credits}</TableCell>
+                        <TableCell>{formatDate(item.redeemedAt)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>交易记录</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {transactions.length === 0 ? (
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <BadgeCent />
+                    </EmptyMedia>
+                    <EmptyTitle>暂无交易</EmptyTitle>
+                    <EmptyDescription>充值、扣费和退款会记录在这里。</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>类型</TableHead>
@@ -138,10 +222,11 @@ export function BillingPage() {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </>
   )

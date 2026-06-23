@@ -16,10 +16,12 @@ import (
 	"github.com/linxunxi/image-mirror/internal/auth"
 	"github.com/linxunxi/image-mirror/internal/billing"
 	"github.com/linxunxi/image-mirror/internal/config"
+	"github.com/linxunxi/image-mirror/internal/content"
 	"github.com/linxunxi/image-mirror/internal/images"
 	"github.com/linxunxi/image-mirror/internal/payments"
 	"github.com/linxunxi/image-mirror/internal/pricing"
 	"github.com/linxunxi/image-mirror/internal/queue"
+	"github.com/linxunxi/image-mirror/internal/redemptions"
 	"github.com/linxunxi/image-mirror/internal/systemconfig"
 	"github.com/linxunxi/image-mirror/internal/users"
 )
@@ -33,6 +35,8 @@ type Services struct {
 	Pricing     *pricing.Service
 	Images      *images.Service
 	Payments    *payments.Service
+	Redemptions *redemptions.Service
+	Content     *content.Service
 	Queue       *queue.Client
 	Admin       *admin.Service
 	ConfigStore *systemconfig.Service
@@ -50,6 +54,9 @@ func NewRouter(s Services) *gin.Engine {
 	})
 
 	r.GET("/api/pricing", pricingHandler(s.Pricing))
+	r.GET("/api/content/docs", publicContentHandler(s.Content, "docs"))
+	r.GET("/api/content/announcement", publicContentHandler(s.Content, "announcement"))
+	r.GET("/api/content/assets/:id", contentAssetHandler(s.Content))
 
 	api := r.Group("/api")
 	api.POST("/auth/register", registerHandler(s.Auth))
@@ -62,6 +69,8 @@ func NewRouter(s Services) *gin.Engine {
 	protected.GET("/billing/balance", balanceHandler(s.Billing))
 	protected.GET("/billing/transactions", transactionsHandler(s.Billing))
 	protected.POST("/billing/epay/orders", createEPayOrderHandler(s.Payments))
+	protected.POST("/billing/redeem", redeemCodeHandler(s.Redemptions))
+	protected.GET("/billing/redemptions", redemptionHistoryHandler(s.Redemptions))
 	protected.GET("/api-keys", listAPIKeysHandler(s.APIKeys))
 	protected.POST("/api-keys", createAPIKeyHandler(s.APIKeys))
 	protected.DELETE("/api-keys/:id", revokeAPIKeyHandler(s.APIKeys))
@@ -86,6 +95,12 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.PUT("/config/openai", updateOpenAIConfigHandler(s))
 	adminGroup.GET("/config/epay", epayConfigHandler(s))
 	adminGroup.PUT("/config/epay", updateEPayConfigHandler(s))
+	adminGroup.GET("/redemption-codes", adminListCodesHandler(s.Redemptions))
+	adminGroup.POST("/redemption-codes", adminGenerateCodesHandler(s.Redemptions))
+	adminGroup.POST("/redemption-codes/bulk", adminBulkCodesHandler(s.Redemptions))
+	adminGroup.GET("/content/:key", adminContentHandler(s.Content))
+	adminGroup.PUT("/content/:key", updateContentHandler(s.Content))
+	adminGroup.POST("/content/:key/assets", uploadContentAssetHandler(s.Content))
 	adminGroup.GET("/stats/overview", adminStatsHandler(s.Admin))
 
 	api.POST("/payments/epay/notify", epayNotifyHandler(s.Payments))
@@ -225,6 +240,36 @@ func createEPayOrderHandler(paymentSvc *payments.Service) gin.HandlerFunc {
 	}
 }
 
+func redeemCodeHandler(redemptionSvc *redemptions.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Code string `json:"code"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Code) == "" {
+			Abort(c, NewError(http.StatusBadRequest, "code is required", err))
+			return
+		}
+		code, err := redemptionSvc.Redeem(c.Request.Context(), CurrentUserID(c), req.Code)
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		OK(c, gin.H{"code": code})
+	}
+}
+
+func redemptionHistoryHandler(redemptionSvc *redemptions.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit, offset := pagination(c)
+		items, err := redemptionSvc.History(c.Request.Context(), CurrentUserID(c), limit, offset)
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, gin.H{"data": items})
+	}
+}
+
 func epayNotifyHandler(paymentSvc *payments.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := c.Request.ParseForm(); err != nil {
@@ -236,6 +281,28 @@ func epayNotifyHandler(paymentSvc *payments.Service) gin.HandlerFunc {
 			return
 		}
 		c.String(http.StatusOK, "success")
+	}
+}
+
+func publicContentHandler(contentSvc *content.Service, key string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		page, err := contentSvc.PublicPage(c.Request.Context(), key)
+		if err != nil {
+			Abort(c, NewError(http.StatusNotFound, "content is not available", err))
+			return
+		}
+		OK(c, page)
+	}
+}
+
+func contentAssetHandler(contentSvc *content.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		data, contentType, err := contentSvc.ReadAsset(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			Abort(c, NewError(http.StatusNotFound, "asset is not available", err))
+			return
+		}
+		c.Data(http.StatusOK, contentType, data)
 	}
 }
 
@@ -609,6 +676,126 @@ func updateEPayConfigHandler(s Services) gin.HandlerFunc {
 			return
 		}
 		OK(c, settings)
+	}
+}
+
+func adminListCodesHandler(redemptionSvc *redemptions.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit, offset := pagination(c)
+		items, err := redemptionSvc.List(c.Request.Context(), limit, offset)
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, gin.H{"data": items})
+	}
+}
+
+func adminGenerateCodesHandler(redemptionSvc *redemptions.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Credits   int64   `json:"credits"`
+			Count     int     `json:"count"`
+			ExpiresAt *string `json:"expiresAt"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || req.Credits <= 0 {
+			Abort(c, NewError(http.StatusBadRequest, "credits must be positive", err))
+			return
+		}
+		if req.Count == 0 {
+			req.Count = 1
+		}
+		var expiresAt *time.Time
+		if req.ExpiresAt != nil && strings.TrimSpace(*req.ExpiresAt) != "" {
+			parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.ExpiresAt))
+			if err != nil {
+				Abort(c, NewError(http.StatusBadRequest, "expiresAt must be RFC3339", err))
+				return
+			}
+			expiresAt = &parsed
+		}
+		items, err := redemptionSvc.Generate(c.Request.Context(), req.Credits, req.Count, expiresAt, CurrentUserID(c))
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		Created(c, gin.H{"data": items})
+	}
+}
+
+func adminBulkCodesHandler(redemptionSvc *redemptions.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			IDs    []string `json:"ids"`
+			Action string   `json:"action"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+			Abort(c, NewError(http.StatusBadRequest, "ids are required", err))
+			return
+		}
+		var count int64
+		var err error
+		switch req.Action {
+		case "disable":
+			count, err = redemptionSvc.Disable(c.Request.Context(), req.IDs)
+		case "delete":
+			count, err = redemptionSvc.Delete(c.Request.Context(), req.IDs)
+		default:
+			Abort(c, NewError(http.StatusBadRequest, "unsupported action", nil))
+			return
+		}
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, gin.H{"count": count})
+	}
+}
+
+func adminContentHandler(contentSvc *content.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		page, err := contentSvc.AdminPage(c.Request.Context(), c.Param("key"))
+		if err != nil {
+			Abort(c, NewError(http.StatusNotFound, "content is not available", err))
+			return
+		}
+		OK(c, page)
+	}
+}
+
+func updateContentHandler(contentSvc *content.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Title    string `json:"title"`
+			Body     string `json:"body"`
+			IsActive bool   `json:"isActive"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		page, err := contentSvc.UpdatePage(c.Request.Context(), c.Param("key"), req.Title, req.Body, req.IsActive, CurrentUserID(c))
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		OK(c, page)
+	}
+}
+
+func uploadContentAssetHandler(contentSvc *content.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		file, err := c.FormFile("file")
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "file is required", err))
+			return
+		}
+		asset, err := contentSvc.UploadAsset(c.Request.Context(), c.Param("key"), CurrentUserID(c), file)
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		Created(c, gin.H{"asset": asset, "markdown": "![" + asset.Filename + "](" + asset.URL + ")"})
 	}
 }
 

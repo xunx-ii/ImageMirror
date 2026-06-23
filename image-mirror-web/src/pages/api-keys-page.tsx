@@ -66,7 +66,7 @@ export function ApiKeysPage() {
 
   return (
     <>
-      <PageHeader title="API Key" description="开发者 API 使用 Bearer Key 鉴权，明文仅在创建时展示一次。" />
+      <PageHeader title="API Key" />
       <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
         <Card>
           <CardHeader>

@@ -1,5 +1,7 @@
 import {
   BadgeCent,
+  Bell,
+  FileText,
   GalleryHorizontalEnd,
   ImagePlus,
   KeyRound,
@@ -8,16 +10,23 @@ import {
   Shield,
 } from "lucide-react"
 import { NavLink, Outlet, useNavigate } from "react-router-dom"
+import { useEffect, useState } from "react"
+import { toast } from "sonner"
 
+import { api, errorMessage } from "@/api/client"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
+import { renderMarkdown } from "@/lib/markdown"
 import { useAuthStore } from "@/stores/auth"
+import type { SiteContent } from "@/types"
 
 const links = [
   { to: "/dashboard", label: "概览", icon: LayoutDashboard },
   { to: "/generate", label: "生成", icon: ImagePlus },
   { to: "/gallery", label: "图库", icon: GalleryHorizontalEnd },
   { to: "/billing", label: "账单", icon: BadgeCent },
+  { to: "/docs", label: "文档", icon: FileText },
   { to: "/api-keys", label: "API Key", icon: KeyRound },
 ]
 
@@ -25,6 +34,21 @@ export function AppLayout() {
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
   const logout = useAuthStore((state) => state.logout)
+  const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
+  const [announcementOpen, setAnnouncementOpen] = useState(false)
+
+  useEffect(() => {
+    api
+      .get<SiteContent>("/api/content/announcement")
+      .then((response) => {
+        setAnnouncement(response.data)
+        if (response.data.body.trim()) setAnnouncementOpen(true)
+      })
+      .catch((error) => {
+        const status = (error as { response?: { status?: number } }).response?.status
+        if (status !== 404) toast.error(errorMessage(error))
+      })
+  }, [user?.id])
 
   return (
     <div className="min-h-svh bg-background text-foreground">
@@ -92,10 +116,25 @@ export function AppLayout() {
         </aside>
         <main className="min-w-0">
           <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-6">
+            <div className="flex justify-end">
+              <Button variant="outline" size="icon" aria-label="公告" onClick={() => setAnnouncementOpen(true)} disabled={!announcement?.body.trim()}>
+                <Bell />
+              </Button>
+            </div>
             <Outlet />
           </div>
         </main>
       </div>
+      <Dialog open={announcementOpen} onOpenChange={setAnnouncementOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{announcement?.title || "公告"}</DialogTitle>
+          </DialogHeader>
+          <div className="flex max-h-[60vh] flex-col gap-3 overflow-auto text-sm">
+            {announcement?.body ? renderMarkdown(announcement.body) : "暂无公告"}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

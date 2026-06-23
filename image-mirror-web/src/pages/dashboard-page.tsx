@@ -51,7 +51,6 @@ export function DashboardPage() {
     <>
       <PageHeader
         title="概览"
-        description="账户余额、最近生成和开发者 API 状态。"
         action={
           <Button variant="outline" onClick={load}>
             <RefreshCw data-icon="inline-start" />

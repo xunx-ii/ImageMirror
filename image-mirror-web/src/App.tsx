@@ -10,6 +10,7 @@ import { ApiKeysPage } from "@/pages/api-keys-page"
 import { AuthPage } from "@/pages/auth-page"
 import { BillingPage } from "@/pages/billing-page"
 import { DashboardPage } from "@/pages/dashboard-page"
+import { DocsPage } from "@/pages/docs-page"
 import { GalleryPage } from "@/pages/gallery-page"
 import { GeneratePage } from "@/pages/generate-page"
 import { useAuthStore } from "@/stores/auth"
@@ -33,6 +34,7 @@ function App() {
             <Route path="/generate" element={<GeneratePage />} />
             <Route path="/gallery" element={<GalleryPage />} />
             <Route path="/billing" element={<BillingPage />} />
+            <Route path="/docs" element={<DocsPage />} />
             <Route path="/api-keys" element={<ApiKeysPage />} />
             <Route element={<AdminRoute />}>
               <Route path="/admin" element={<AdminPage />} />

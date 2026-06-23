@@ -49,6 +49,24 @@ func (s *Local) SaveReference(ctx context.Context, userID string, imageID string
 	return s.write(ctx, key, data)
 }
 
+func (s *Local) SaveContentAsset(ctx context.Context, userID string, assetID string, filename string, data []byte) (string, error) {
+	now := time.Now()
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+	default:
+		ext = ".png"
+	}
+	key := filepath.ToSlash(filepath.Join(
+		"content",
+		fmt.Sprintf("%04d", now.Year()),
+		fmt.Sprintf("%02d", int(now.Month())),
+		userID,
+		assetID+ext,
+	))
+	return s.write(ctx, key, data)
+}
+
 func (s *Local) write(ctx context.Context, key string, data []byte) (string, error) {
 	path, err := s.resolve(key)
 	if err != nil {
@@ -69,6 +87,14 @@ func (s *Local) write(ctx context.Context, key string, data []byte) (string, err
 }
 
 func (s *Local) ReadImage(_ context.Context, key string) ([]byte, error) {
+	path, err := s.resolve(key)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+func (s *Local) ReadFile(_ context.Context, key string) ([]byte, error) {
 	path, err := s.resolve(key)
 	if err != nil {
 		return nil, err
