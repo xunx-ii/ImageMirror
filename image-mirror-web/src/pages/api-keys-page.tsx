@@ -54,10 +54,10 @@ export function ApiKeysPage() {
     }
   }
 
-  async function revoke(id: string) {
+  async function deleteKey(id: string) {
     try {
       await api.delete(`/api/api-keys/${id}`)
-      toast.success("已吊销")
+      toast.success("API Key 已删除")
       await load()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -71,7 +71,7 @@ export function ApiKeysPage() {
         <Card>
           <CardHeader>
             <CardTitle>创建 Key</CardTitle>
-            <CardDescription>Key 会以 SHA-256 哈希保存，列表只展示前缀。</CardDescription>
+            <CardDescription>Key 会以 SHA-256 哈希保存，列表只展示前缀，删除后不再保留。</CardDescription>
           </CardHeader>
           <CardContent>
             <form className="flex flex-col gap-5" onSubmit={createKey}>
@@ -125,7 +125,7 @@ export function ApiKeysPage() {
                       </TableCell>
                       <TableCell>{formatDate(key.lastUsedAt)}</TableCell>
                       <TableCell>
-                        <Button variant="destructive" size="icon-sm" onClick={() => void revoke(key.id)} disabled={key.status !== "ACTIVE"}>
+                        <Button variant="destructive" size="icon-sm" aria-label="删除 API Key" onClick={() => void deleteKey(key.id)} disabled={key.status !== "ACTIVE"}>
                           <Trash2 />
                         </Button>
                       </TableCell>

@@ -68,7 +68,7 @@ ImageMirror/
 
 核心模型：
 - **User**: id, email, passwordHash, role(USER/ADMIN), status, balance(积分), lastLoginAt
-- **ApiKey**: id, userId, name, keyPrefix(展示用), keyHash(SHA-256,唯一), status(ACTIVE/REVOKED), lastUsedAt
+- **ApiKey**: id, userId, name, keyPrefix(展示用), keyHash(SHA-256,唯一), status(ACTIVE), lastUsedAt
 - **ImageGeneration**: id, userId, apiKeyId, model, prompt, size, quality, status(PENDING/PROCESSING/COMPLETED/FAILED/EXPIRED), storageKey, storageUrl, creditsCost, expiresAt(创建+24h), deletedAt
 - **CreditTransaction**: id, userId, type(RECHARGE/CONSUME/REFUND/ADMIN_ADJUST), amount, balanceAfter, description, relatedId
 - **PricingRule**: id, model, size, quality, credits, isActive — 唯一约束(model,size,quality)
@@ -140,7 +140,7 @@ ImageMirror/
 |------|---------|------|
 | Asynq 队列 | `asynq:image-generation` / `asynq:cleanup` | 生成任务+定时清理 |
 | Refresh Token | `refresh:{userId}:{tokenId}` TTL=7d | 登出时删除实现主动失效 |
-| API Key 缓存 | `apikey:{keyHash}` TTL=5min | 避免每次查DB,吊销时清除 |
+| API Key 缓存 | `apikey:{keyHash}` TTL=5min | 避免每次查DB,删除时清除 |
 | 定价规则缓存 | `pricing:rules` (Hash) | 修改后刷新 |
 | 系统配置缓存 | `config:all` (Hash) | 修改后刷新 |
 | API 限流 | `ratelimit:{userId}:{window}` | 滑动窗口,每用户每分钟10次 |
@@ -198,7 +198,7 @@ ImageMirror/
 17. 前端生成工作台 + 我的图片页
 
 ### 阶段五：API Key 与开发者API (P0)
-18. ApiKeys 模块: 创建/吊销/列表 (SHA-256哈希)
+18. ApiKeys 模块: 创建/删除/列表 (SHA-256哈希)
 19. ApiKey 中间件 + Redis缓存
 20. 开发者 API `/v1/images/generations` (同步等待模式)
 21. 前端 API Key 管理页

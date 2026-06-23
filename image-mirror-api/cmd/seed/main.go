@@ -34,17 +34,18 @@ func main() {
 	}
 
 	seeds := []pricingSeed{
-		{"gpt-image-2", "1024x1024", "low", 4},
-		{"gpt-image-2", "1024x1024", "medium", 8},
-		{"gpt-image-2", "1024x1024", "high", 16},
-		{"gpt-image-2", "1024x1024", "auto", 8},
-		{"gpt-image-2", "1536x1024", "low", 6},
-		{"gpt-image-2", "1536x1024", "medium", 12},
-		{"gpt-image-2", "1536x1024", "high", 24},
-		{"gpt-image-2", "1024x1536", "low", 6},
-		{"gpt-image-2", "1024x1536", "medium", 12},
-		{"gpt-image-2", "1024x1536", "high", 24},
-		{"gpt-image-2", "auto", "auto", 10},
+		{"gpt-image-2", "1k", "low", 4},
+		{"gpt-image-2", "1k", "medium", 8},
+		{"gpt-image-2", "1k", "high", 16},
+		{"gpt-image-2", "1k", "auto", 8},
+		{"gpt-image-2", "2k", "low", 8},
+		{"gpt-image-2", "2k", "medium", 16},
+		{"gpt-image-2", "2k", "high", 32},
+		{"gpt-image-2", "2k", "auto", 16},
+		{"gpt-image-2", "4k", "low", 16},
+		{"gpt-image-2", "4k", "medium", 32},
+		{"gpt-image-2", "4k", "high", 64},
+		{"gpt-image-2", "4k", "auto", 32},
 	}
 	for _, seed := range seeds {
 		if _, err := db.Exec(ctx, `

@@ -16,16 +16,17 @@ import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { downloadImage, expiresIn } from "@/lib/format"
+import { resolutionBucket, sizeString, validateImageSize } from "@/lib/image-size"
 import { useAuthStore } from "@/stores/auth"
 import type { ImageGeneration, PricingRule } from "@/types"
 
-const sizeOptions = ["1024x1024", "1536x1024", "1024x1536", "auto"]
 const qualityOptions = ["low", "medium", "high", "auto"]
 
 export function GeneratePage() {
   const refreshMe = useAuthStore((state) => state.refreshMe)
   const [prompt, setPrompt] = useState("A clean product-style image of a glass teapot on a walnut desk, soft daylight")
-  const [size, setSize] = useState("1024x1024")
+  const [width, setWidth] = useState(1024)
+  const [height, setHeight] = useState(1024)
   const [quality, setQuality] = useState("medium")
   const [pricing, setPricing] = useState<PricingRule[]>([])
   const [current, setCurrent] = useState<ImageGeneration | null>(null)
@@ -41,8 +42,13 @@ export function GeneratePage() {
   }, [])
 
   const cost = useMemo(() => {
-    return pricing.find((rule) => rule.model === "gpt-image-2" && rule.size === size && rule.quality === quality)?.credits
-  }, [pricing, quality, size])
+    const bucket = resolutionBucket(width, height)
+    return pricing.find((rule) => rule.model === "gpt-image-2" && rule.size === bucket && rule.quality === quality)?.credits
+  }, [height, pricing, quality, width])
+
+  const sizeError = useMemo(() => validateImageSize(width, height), [height, width])
+  const size = sizeString(width, height)
+  const bucket = resolutionBucket(width, height)
 
   useEffect(() => {
     if (!current || current.status === "COMPLETED" || current.status === "FAILED" || current.status === "EXPIRED") return
@@ -69,6 +75,10 @@ export function GeneratePage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (sizeError) {
+      toast.error(sizeError)
+      return
+    }
     setSubmitting(true)
     try {
       const form = new FormData()
@@ -130,20 +140,11 @@ export function GeneratePage() {
                 </Field>
                 <Field>
                   <FieldLabel>尺寸</FieldLabel>
-                  <Select value={size} onValueChange={(value) => setSize(value ?? size)}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {sizeOptions.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {item}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input aria-label="宽度" type="number" min={16} max={3840} step={16} value={width} onChange={(event) => setWidth(Number(event.target.value))} />
+                    <Input aria-label="高度" type="number" min={16} max={2160} step={16} value={height} onChange={(event) => setHeight(Number(event.target.value))} />
+                  </div>
+                  <FieldDescription>{sizeError ?? `当前按 ${bucket.toUpperCase()} 档计费`}</FieldDescription>
                 </Field>
                 <Field>
                   <FieldLabel>质量</FieldLabel>
@@ -197,7 +198,7 @@ export function GeneratePage() {
                 <span className="text-sm text-muted-foreground">本次预扣</span>
                 <Badge variant="secondary">{cost ?? "-"} credits</Badge>
               </div>
-              <Button disabled={submitting || busy || !prompt.trim()} type="submit">
+              <Button disabled={submitting || busy || !prompt.trim() || !!sizeError} type="submit">
                 {submitting || busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Sparkles data-icon="inline-start" />}
                 {submitting ? "提交中" : busy ? "生成中" : "生成图片"}
               </Button>

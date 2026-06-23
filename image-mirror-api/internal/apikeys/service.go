@@ -63,7 +63,7 @@ func (s *Service) List(ctx context.Context, userID string) ([]APIKey, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, user_id, name, key_prefix, status, last_used_at, created_at, revoked_at
 		FROM api_keys
-		WHERE user_id=$1
+		WHERE user_id=$1 AND status='ACTIVE'
 		ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
@@ -84,8 +84,8 @@ func (s *Service) List(ctx context.Context, userID string) ([]APIKey, error) {
 func (s *Service) Revoke(ctx context.Context, userID string, keyID string) error {
 	var hash string
 	err := s.db.QueryRow(ctx, `
-		UPDATE api_keys SET status='REVOKED', revoked_at=now()
-		WHERE id=$1 AND user_id=$2 AND status='ACTIVE'
+		DELETE FROM api_keys
+		WHERE id=$1 AND user_id=$2
 		RETURNING key_hash
 	`, keyID, userID).Scan(&hash)
 	if err != nil {

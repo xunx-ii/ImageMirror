@@ -50,10 +50,9 @@ export type ApiKey = {
   userId: string
   name: string
   keyPrefix: string
-  status: "ACTIVE" | "REVOKED"
+  status: "ACTIVE"
   lastUsedAt?: string
   createdAt: string
-  revokedAt?: string
 }
 
 export type CreatedApiKey = ApiKey & {

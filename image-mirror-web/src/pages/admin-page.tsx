@@ -14,9 +14,9 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { formatDate } from "@/lib/format"
+import { resolutionBuckets } from "@/lib/image-size"
 import type { AdminOverview, EPaySettings, OpenAISettings, PricingRule, User } from "@/types"
 
-const sizes = ["1024x1024", "1536x1024", "1024x1536", "auto"]
 const qualities = ["low", "medium", "high", "auto"]
 
 export function AdminPage() {
@@ -26,7 +26,7 @@ export function AdminPage() {
   const [openAI, setOpenAI] = useState<OpenAISettings | null>(null)
   const [epay, setEPay] = useState<EPaySettings | null>(null)
   const [model, setModel] = useState("gpt-image-2")
-  const [size, setSize] = useState("1024x1024")
+  const [size, setSize] = useState("1k")
   const [quality, setQuality] = useState("medium")
   const [credits, setCredits] = useState(8)
   const [editingPricingId, setEditingPricingId] = useState<string | null>(null)
@@ -186,7 +186,7 @@ export function AdminPage() {
   function resetPricingForm() {
     setEditingPricingId(null)
     setModel("gpt-image-2")
-    setSize("1024x1024")
+    setSize("1k")
     setQuality("medium")
     setCredits(8)
   }
@@ -290,7 +290,7 @@ export function AdminPage() {
           <Card>
             <CardHeader>
               <CardTitle>{editingPricingId ? "编辑定价" : "新增定价"}</CardTitle>
-              <CardDescription>按 model、size、quality 维护每次调用积分。</CardDescription>
+              <CardDescription>按模型、分辨率档位和质量维护每次调用积分。</CardDescription>
             </CardHeader>
             <CardContent>
               <form className="flex flex-col gap-5" onSubmit={savePricing}>
@@ -300,16 +300,16 @@ export function AdminPage() {
                     <Input id="pricing-model" value={model} onChange={(event) => setModel(event.target.value)} />
                   </Field>
                   <Field>
-                    <FieldLabel>尺寸</FieldLabel>
+                    <FieldLabel>分辨率档位</FieldLabel>
                     <Select value={size} onValueChange={(value) => setSize(value ?? size)}>
                       <SelectTrigger className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
-                          {sizes.map((item) => (
+                          {resolutionBuckets.map((item) => (
                             <SelectItem key={item} value={item}>
-                              {item}
+                              {item.toUpperCase()}
                             </SelectItem>
                           ))}
                         </SelectGroup>
@@ -363,7 +363,7 @@ export function AdminPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>模型</TableHead>
-                    <TableHead>尺寸</TableHead>
+                    <TableHead>分辨率档位</TableHead>
                     <TableHead>质量</TableHead>
                     <TableHead>积分</TableHead>
                     <TableHead>操作</TableHead>
@@ -373,7 +373,7 @@ export function AdminPage() {
                   {pricing.map((rule) => (
                     <TableRow key={rule.id}>
                       <TableCell>{rule.model}</TableCell>
-                      <TableCell>{rule.size}</TableCell>
+                      <TableCell>{rule.size.toUpperCase()}</TableCell>
                       <TableCell>{rule.quality}</TableCell>
                       <TableCell className="tabular-nums">{rule.credits}</TableCell>
                       <TableCell>

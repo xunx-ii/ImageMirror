@@ -464,10 +464,8 @@ func validate(req CreateRequest) error {
 	if req.Model != "gpt-image-2" {
 		return errors.New("only gpt-image-2 is enabled")
 	}
-	switch req.Size {
-	case "1024x1024", "1536x1024", "1024x1536", "auto":
-	default:
-		return errors.New("unsupported size")
+	if _, _, err := pricing.ParseCustomSize(req.Size); err != nil {
+		return err
 	}
 	switch req.Quality {
 	case "low", "medium", "high", "auto":

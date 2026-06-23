@@ -4,12 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
+
+const (
+	minImagePixels = 655360
+	maxImageEdge   = 3840
+	maxImagePixels = 3840 * 2160
+)
+
+var customSizePattern = regexp.MustCompile(`^(\d+)x(\d+)$`)
 
 type Rule struct {
 	ID        string    `json:"id"`
@@ -32,7 +43,11 @@ func NewService(db *pgxpool.Pool, redisClient *redis.Client) *Service {
 }
 
 func (s *Service) GetCost(ctx context.Context, model string, size string, quality string) (int64, error) {
-	cacheKey := fmt.Sprintf("pricing:%s:%s:%s", model, size, quality)
+	bucket, err := ResolutionBucket(size)
+	if err != nil {
+		return 0, err
+	}
+	cacheKey := fmt.Sprintf("pricing:%s:%s:%s", model, bucket, quality)
 	cached, err := s.redis.Get(ctx, cacheKey).Int64()
 	if err == nil && cached > 0 {
 		return cached, nil
@@ -41,7 +56,7 @@ func (s *Service) GetCost(ctx context.Context, model string, size string, qualit
 	err = s.db.QueryRow(ctx, `
 		SELECT credits FROM pricing_rules
 		WHERE model=$1 AND size=$2 AND quality=$3 AND is_active=true
-	`, model, size, quality).Scan(&credits)
+	`, model, bucket, quality).Scan(&credits)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, errors.New("pricing rule not found")
 	}
@@ -50,6 +65,73 @@ func (s *Service) GetCost(ctx context.Context, model string, size string, qualit
 	}
 	_ = s.redis.Set(ctx, cacheKey, credits, 10*time.Minute).Err()
 	return credits, nil
+}
+
+func ResolutionBucket(size string) (string, error) {
+	width, height, err := ParseCustomSize(size)
+	if err != nil {
+		return "", err
+	}
+	longest := width
+	if height > longest {
+		longest = height
+	}
+	switch {
+	case longest <= 1024:
+		return "1k", nil
+	case longest <= 2048:
+		return "2k", nil
+	default:
+		return "4k", nil
+	}
+}
+
+func ParseCustomSize(size string) (int, int, error) {
+	size = strings.ToLower(strings.TrimSpace(size))
+	matches := customSizePattern.FindStringSubmatch(size)
+	if matches == nil {
+		return 0, 0, errors.New("size must use WIDTHxHEIGHT format")
+	}
+	width, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, 0, errors.New("invalid width")
+	}
+	height, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return 0, 0, errors.New("invalid height")
+	}
+	if width <= 0 || height <= 0 {
+		return 0, 0, errors.New("width and height must be positive")
+	}
+	if width%16 != 0 || height%16 != 0 {
+		return 0, 0, errors.New("width and height must be multiples of 16")
+	}
+	if width > maxImageEdge || height > maxImageEdge {
+		return 0, 0, errors.New("longest edge must not exceed 3840")
+	}
+	if width*height < minImagePixels {
+		return 0, 0, errors.New("total pixels must be at least 655360")
+	}
+	if width*height > maxImagePixels {
+		return 0, 0, errors.New("total pixels must not exceed 3840x2160")
+	}
+	if width*3 < height || height*3 < width {
+		return 0, 0, errors.New("aspect ratio must be between 1:3 and 3:1")
+	}
+	return width, height, nil
+}
+
+func NormalizeBucket(size string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "1k":
+		return "1k", nil
+	case "2k":
+		return "2k", nil
+	case "4k":
+		return "4k", nil
+	default:
+		return "", errors.New("pricing size must be 1k, 2k, or 4k")
+	}
 }
 
 func (s *Service) List(ctx context.Context) ([]Rule, error) {
@@ -75,6 +157,10 @@ func (s *Service) List(ctx context.Context) ([]Rule, error) {
 }
 
 func (s *Service) Upsert(ctx context.Context, model string, size string, quality string, credits int64, active bool) (Rule, error) {
+	size, err := NormalizeBucket(size)
+	if err != nil {
+		return Rule{}, err
+	}
 	row := s.db.QueryRow(ctx, `
 		INSERT INTO pricing_rules(model, size, quality, credits, is_active)
 		VALUES ($1, $2, $3, $4, $5)
@@ -91,6 +177,10 @@ func (s *Service) Upsert(ctx context.Context, model string, size string, quality
 }
 
 func (s *Service) Update(ctx context.Context, id string, model string, size string, quality string, credits int64, active bool) (Rule, error) {
+	size, err := NormalizeBucket(size)
+	if err != nil {
+		return Rule{}, err
+	}
 	var oldModel, oldSize, oldQuality string
 	if err := s.db.QueryRow(ctx, `
 		SELECT model, size, quality FROM pricing_rules WHERE id=$1
