@@ -20,6 +20,7 @@ const (
 	KeyEPayName      = "epay_name"
 	KeyEPayRate      = "epay_credits_per_yuan"
 	KeyEPayEnabled   = "epay_enabled"
+	KeyMaxResolution = "max_resolution_bucket"
 )
 
 type OpenAISettings struct {
@@ -39,12 +40,41 @@ type EPaySettings struct {
 	Enabled        bool   `json:"enabled"`
 }
 
+type PlatformSettings struct {
+	MaxResolutionBucket string `json:"maxResolutionBucket"`
+	Allow4K             bool   `json:"allow4k"`
+}
+
 type Service struct {
 	db *pgxpool.Pool
 }
 
 func NewService(db *pgxpool.Pool) *Service {
 	return &Service{db: db}
+}
+
+func (s *Service) PublicPlatform(ctx context.Context) (PlatformSettings, error) {
+	bucket, err := s.value(ctx, KeyMaxResolution)
+	if err != nil {
+		return PlatformSettings{}, err
+	}
+	return normalizePlatform(bucket), nil
+}
+
+func (s *Service) UpdatePlatform(ctx context.Context, maxResolutionBucket string, updatedBy string) (PlatformSettings, error) {
+	settings := normalizePlatform(maxResolutionBucket)
+	if err := s.upsert(ctx, KeyMaxResolution, settings.MaxResolutionBucket, updatedBy); err != nil {
+		return PlatformSettings{}, err
+	}
+	return settings, nil
+}
+
+func (s *Service) MaxResolutionBucket(ctx context.Context) (string, error) {
+	settings, err := s.PublicPlatform(ctx)
+	if err != nil {
+		return "", err
+	}
+	return settings.MaxResolutionBucket, nil
 }
 
 func (s *Service) GetOpenAI(ctx context.Context, fallbackAPIKey string, fallbackBaseURL string) (string, string, error) {
@@ -222,4 +252,15 @@ func (s *Service) upsert(ctx context.Context, key string, value string, updatedB
 func parsePositiveInt(value string) (int64, bool) {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	return parsed, err == nil && parsed > 0
+}
+
+func normalizePlatform(maxResolutionBucket string) PlatformSettings {
+	bucket := strings.ToLower(strings.TrimSpace(maxResolutionBucket))
+	if bucket != "2k" {
+		bucket = "4k"
+	}
+	return PlatformSettings{
+		MaxResolutionBucket: bucket,
+		Allow4K:             bucket == "4k",
+	}
 }

@@ -14,6 +14,8 @@ import {
   Save,
   Settings,
   Shield,
+  ToggleLeft,
+  ToggleRight,
   Trash2,
   Users,
   type LucideIcon,
@@ -35,7 +37,7 @@ import { formatDate } from "@/lib/format"
 import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
 import { useAuthStore } from "@/stores/auth"
-import type { AdminOverview, ContentAsset, EPaySettings, OpenAISettings, PricingRule, RedemptionCode, SiteContent, User } from "@/types"
+import type { AdminOverview, ContentAsset, EPaySettings, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
 
@@ -48,6 +50,7 @@ export function AdminPage() {
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
   const [openAI, setOpenAI] = useState<OpenAISettings | null>(null)
   const [epay, setEPay] = useState<EPaySettings | null>(null)
+  const [platform, setPlatform] = useState<PlatformSettings>({ maxResolutionBucket: "4k", allow4k: true })
   const [docs, setDocs] = useState<SiteContent | null>(null)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
 
@@ -80,16 +83,19 @@ export function AdminPage() {
 
   const selectedCodeSet = useMemo(() => new Set(selectedCodes), [selectedCodes])
   const allCodesSelected = codes.length > 0 && selectedCodes.length === codes.length
+  const enabledResolutionBuckets = useMemo(() => resolutionBuckets.filter((item) => platform.allow4k || item !== "4k"), [platform.allow4k])
+  const visiblePricing = useMemo(() => pricing.filter((rule) => platform.allow4k || rule.size !== "4k"), [platform.allow4k, pricing])
 
   const load = useCallback(async () => {
     try {
-      const [statsResponse, usersResponse, pricingResponse, codesResponse, openAIResponse, epayResponse, docsResponse, announcementResponse] = await Promise.all([
+      const [statsResponse, usersResponse, pricingResponse, codesResponse, openAIResponse, epayResponse, platformResponse, docsResponse, announcementResponse] = await Promise.all([
         api.get<AdminOverview>("/api/admin/stats/overview"),
         api.get<{ data: User[] }>("/api/admin/users?limit=100"),
         api.get<{ data: PricingRule[] }>("/api/admin/pricing"),
         api.get<{ data: RedemptionCode[] }>("/api/admin/redemption-codes?limit=100"),
         api.get<OpenAISettings>("/api/admin/config/openai"),
         api.get<EPaySettings>("/api/admin/config/epay"),
+        api.get<PlatformSettings>("/api/admin/config/platform"),
         api.get<SiteContent>("/api/admin/content/docs"),
         api.get<SiteContent>("/api/admin/content/announcement"),
       ])
@@ -108,6 +114,8 @@ export function AdminPage() {
       setEPayName(epayResponse.data.name || "ImageMirror credits")
       setEPayCreditsPerYuan(epayResponse.data.creditsPerYuan || 100)
       setEPayEnabled(epayResponse.data.enabled)
+      setPlatform(platformResponse.data)
+      setSize((value) => (!platformResponse.data.allow4k && value === "4k" ? "2k" : value))
 
       setDocs(docsResponse.data)
       setDocsTitle(docsResponse.data.title || "文档")
@@ -158,6 +166,24 @@ export function AdminPage() {
       await api.delete(`/api/admin/pricing/${rule.id}`)
       toast.success("定价已删除")
       if (editingPricingId === rule.id) resetPricingForm()
+      await load()
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  async function toggle4K() {
+    const allow4k = !platform.allow4k
+    try {
+      const { data } = await api.put<PlatformSettings>("/api/admin/config/platform", {
+        maxResolutionBucket: allow4k ? "4k" : "2k",
+      })
+      setPlatform(data)
+      if (!data.allow4k && size === "4k") {
+        setSize("2k")
+        setEditingPricingId(null)
+      }
+      toast.success(data.allow4k ? "已启用 4K 图片" : "已禁用 4K，最大支持 2K")
       await load()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -406,6 +432,7 @@ export function AdminPage() {
               <Badge variant="secondary">OpenAI {openAI?.hasOpenaiApiKey ? "已配置" : "未配置"}</Badge>
               <Badge variant="secondary">支付 {epay?.enabled ? "已启用" : "未启用"}</Badge>
               <Badge variant="secondary">规则 {pricing.length}</Badge>
+              <Badge variant="secondary">最大 {platform.maxResolutionBucket.toUpperCase()}</Badge>
               <Badge variant="secondary">兑换码 {codes.length}</Badge>
               <Badge variant="secondary">用户 {users.length}</Badge>
             </CardContent>
@@ -511,7 +538,7 @@ export function AdminPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
-                          {resolutionBuckets.map((item) => (
+                          {enabledResolutionBuckets.map((item) => (
                             <SelectItem key={item} value={item}>
                               {item.toUpperCase()}
                             </SelectItem>
@@ -559,8 +586,16 @@ export function AdminPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>价格规则</CardTitle>
-              <CardDescription>删除后规则会从计费和前台价格列表中移除。</CardDescription>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle>价格规则</CardTitle>
+                  <CardDescription>删除后规则会从计费和前台价格列表中移除。</CardDescription>
+                </div>
+                <Button variant="outline" onClick={() => void toggle4K()}>
+                  {platform.allow4k ? <ToggleRight data-icon="inline-start" /> : <ToggleLeft data-icon="inline-start" />}
+                  {platform.allow4k ? "禁用 4K" : "启用 4K"}
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <Table>
@@ -574,7 +609,7 @@ export function AdminPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pricing.map((rule) => (
+                  {visiblePricing.map((rule) => (
                     <TableRow key={rule.id}>
                       <TableCell>{rule.model}</TableCell>
                       <TableCell>{rule.size.toUpperCase()}</TableCell>

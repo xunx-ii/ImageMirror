@@ -54,6 +54,7 @@ func NewRouter(s Services) *gin.Engine {
 	})
 
 	r.GET("/api/pricing", pricingHandler(s.Pricing))
+	r.GET("/api/settings/platform", platformSettingsHandler(s))
 	r.GET("/api/content/docs", publicContentHandler(s.Content, "docs"))
 	r.GET("/api/content/announcement", publicContentHandler(s.Content, "announcement"))
 	r.GET("/api/content/assets/:id", contentAssetHandler(s.Content))
@@ -87,8 +88,8 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.Use(JWTAuth(s.Auth), AdminOnly())
 	adminGroup.GET("/users", adminListUsersHandler(s.Admin))
 	adminGroup.POST("/users/:id/adjust-balance", adminAdjustBalanceHandler(s.Admin))
-	adminGroup.PUT("/users/:id/status", adminUpdateUserStatusHandler(s.Admin))
-	adminGroup.DELETE("/users/:id", adminDeleteUserHandler(s.Admin))
+	adminGroup.PUT("/users/:id/status", adminUpdateUserStatusHandler(s))
+	adminGroup.DELETE("/users/:id", adminDeleteUserHandler(s))
 	adminGroup.GET("/pricing", pricingHandler(s.Pricing))
 	adminGroup.POST("/pricing", upsertPricingHandler(s.Pricing))
 	adminGroup.PUT("/pricing/:id", updatePricingHandler(s.Pricing))
@@ -97,6 +98,8 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.PUT("/config/openai", updateOpenAIConfigHandler(s))
 	adminGroup.GET("/config/epay", epayConfigHandler(s))
 	adminGroup.PUT("/config/epay", updateEPayConfigHandler(s))
+	adminGroup.GET("/config/platform", platformSettingsHandler(s))
+	adminGroup.PUT("/config/platform", updatePlatformConfigHandler(s))
 	adminGroup.GET("/redemption-codes", adminListCodesHandler(s.Redemptions))
 	adminGroup.POST("/redemption-codes", adminGenerateCodesHandler(s.Redemptions))
 	adminGroup.POST("/redemption-codes/bulk", adminBulkCodesHandler(s.Redemptions))
@@ -197,6 +200,17 @@ func pricingHandler(pricingSvc *pricing.Service) gin.HandlerFunc {
 			return
 		}
 		OK(c, gin.H{"data": rules})
+	}
+}
+
+func platformSettingsHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		settings, err := s.ConfigStore.PublicPlatform(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
 	}
 }
 
@@ -510,6 +524,7 @@ func imageFileHandler(svc *images.Service) gin.HandlerFunc {
 			Abort(c, NewError(http.StatusNotFound, "image file is not available", err))
 			return
 		}
+		c.Header("Cache-Control", "private, max-age=300")
 		c.Data(http.StatusOK, "image/png", bytes)
 	}
 }
@@ -685,6 +700,33 @@ func updateEPayConfigHandler(s Services) gin.HandlerFunc {
 	}
 }
 
+func updatePlatformConfigHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			MaxResolutionBucket string `json:"maxResolutionBucket"`
+			Allow4K             *bool  `json:"allow4k"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		bucket := req.MaxResolutionBucket
+		if req.Allow4K != nil {
+			if *req.Allow4K {
+				bucket = "4k"
+			} else {
+				bucket = "2k"
+			}
+		}
+		settings, err := s.ConfigStore.UpdatePlatform(c.Request.Context(), bucket, CurrentUserID(c))
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
 func adminListCodesHandler(redemptionSvc *redemptions.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		limit, offset := pagination(c)
@@ -835,7 +877,7 @@ func adminAdjustBalanceHandler(adminSvc *admin.Service) gin.HandlerFunc {
 	}
 }
 
-func adminUpdateUserStatusHandler(adminSvc *admin.Service) gin.HandlerFunc {
+func adminUpdateUserStatusHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Status string `json:"status"`
@@ -844,21 +886,25 @@ func adminUpdateUserStatusHandler(adminSvc *admin.Service) gin.HandlerFunc {
 			Abort(c, NewError(http.StatusBadRequest, "status is required", err))
 			return
 		}
-		user, err := adminSvc.SetUserStatus(c.Request.Context(), CurrentUserID(c), c.Param("id"), req.Status)
+		targetID := c.Param("id")
+		user, err := s.Admin.SetUserStatus(c.Request.Context(), CurrentUserID(c), targetID, req.Status)
 		if err != nil {
 			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
 			return
 		}
+		_ = s.Auth.InvalidateUserStatus(c.Request.Context(), targetID)
 		OK(c, gin.H{"user": user})
 	}
 }
 
-func adminDeleteUserHandler(adminSvc *admin.Service) gin.HandlerFunc {
+func adminDeleteUserHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := adminSvc.DeleteUser(c.Request.Context(), CurrentUserID(c), c.Param("id")); err != nil {
+		targetID := c.Param("id")
+		if err := s.Admin.DeleteUser(c.Request.Context(), CurrentUserID(c), targetID); err != nil {
 			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
 			return
 		}
+		_ = s.Auth.InvalidateUserStatus(c.Request.Context(), targetID)
 		OK(c, gin.H{"ok": true})
 	}
 }

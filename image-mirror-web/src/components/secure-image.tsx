@@ -1,24 +1,47 @@
-import { useEffect, useState } from "react"
-import type { CSSProperties } from "react"
+import { useEffect, useRef, useState } from "react"
+import type { ImgHTMLAttributes } from "react"
 
 import { api } from "@/api/client"
 import { Skeleton } from "@/components/ui/skeleton"
 
-type SecureImageProps = {
+type SecureImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "alt" | "src"> & {
   imageId: string
   alt: string
-  className?: string
-  style?: CSSProperties
 }
 
-export function SecureImage({ imageId, alt, className, style }: SecureImageProps) {
+export function SecureImage({ imageId, alt, className, style, loading = "lazy", decoding = "async", ...props }: SecureImageProps) {
+  const placeholderRef = useRef<HTMLDivElement | null>(null)
+  const [visibleState, setVisibleState] = useState({ imageId: "", visible: false })
   const [state, setState] = useState<{
     imageId: string
     url: string | null
     failed: boolean
   }>({ imageId, url: null, failed: false })
+  const shouldLoad = loading === "eager" || (visibleState.imageId === imageId && visibleState.visible)
 
   useEffect(() => {
+    if (shouldLoad) return
+    const node = placeholderRef.current
+    if (!node || !("IntersectionObserver" in window)) {
+      window.requestAnimationFrame(() => setVisibleState({ imageId, visible: true }))
+      return
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisibleState({ imageId, visible: true })
+          observer.disconnect()
+        }
+      },
+      { rootMargin: "240px" }
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [imageId, shouldLoad])
+
+  useEffect(() => {
+    if (!shouldLoad) return
     let revoked: string | null = null
     let cancelled = false
 
@@ -37,10 +60,10 @@ export function SecureImage({ imageId, alt, className, style }: SecureImageProps
       cancelled = true
       if (revoked) URL.revokeObjectURL(revoked)
     }
-  }, [imageId])
+  }, [imageId, shouldLoad])
 
-  if (state.imageId !== imageId) {
-    return <Skeleton className="aspect-square w-full rounded-lg" />
+  if (!shouldLoad || state.imageId !== imageId) {
+    return <Skeleton ref={placeholderRef} className="aspect-square w-full rounded-lg" />
   }
 
   if (state.failed) {
@@ -55,5 +78,5 @@ export function SecureImage({ imageId, alt, className, style }: SecureImageProps
     return <Skeleton className="aspect-square w-full rounded-lg" />
   }
 
-  return <img src={state.url} alt={alt} className={className} style={style} />
+  return <img src={state.url} alt={alt} className={className} style={style} loading={loading} decoding={decoding} {...props} />
 }

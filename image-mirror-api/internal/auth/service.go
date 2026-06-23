@@ -93,14 +93,30 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 }
 
 func (s *Service) EnsureActive(ctx context.Context, userID string) error {
+	cacheKey := userStatusCacheKey(userID)
+	if cached, err := s.redis.Get(ctx, cacheKey).Result(); err == nil {
+		if cached == "ACTIVE" {
+			return nil
+		}
+		return errors.New("account is suspended")
+	}
 	user, err := s.users.FindByID(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if user.Status != "ACTIVE" {
+		_ = s.redis.Set(ctx, cacheKey, user.Status, 30*time.Second).Err()
 		return errors.New("account is suspended")
 	}
+	_ = s.redis.Set(ctx, cacheKey, user.Status, 30*time.Second).Err()
 	return nil
+}
+
+func (s *Service) InvalidateUserStatus(ctx context.Context, userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return nil
+	}
+	return s.redis.Del(ctx, userStatusCacheKey(userID)).Err()
 }
 
 func (s *Service) ParseAccessToken(tokenString string) (*Claims, error) {
@@ -149,6 +165,10 @@ func (s *Service) issueTokens(ctx context.Context, user users.User) (TokenPair, 
 func HashPassword(password string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(hash), err
+}
+
+func userStatusCacheKey(userID string) string {
+	return "user_status:" + userID
 }
 
 func randomToken(bytesLen int) (string, error) {

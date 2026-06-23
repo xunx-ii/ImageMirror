@@ -21,6 +21,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/openai"
 	"github.com/linxunxi/image-mirror/internal/pricing"
 	"github.com/linxunxi/image-mirror/internal/storage"
+	"github.com/linxunxi/image-mirror/internal/systemconfig"
 )
 
 type Generation struct {
@@ -61,10 +62,11 @@ type Service struct {
 	billing *billing.Service
 	storage *storage.Local
 	openai  *openai.Client
+	configs *systemconfig.Service
 }
 
-func NewService(cfg config.Config, db *pgxpool.Pool, pricingSvc *pricing.Service, billingSvc *billing.Service, storageSvc *storage.Local, openAIClient *openai.Client) *Service {
-	return &Service{cfg: cfg, db: db, pricing: pricingSvc, billing: billingSvc, storage: storageSvc, openai: openAIClient}
+func NewService(cfg config.Config, db *pgxpool.Pool, pricingSvc *pricing.Service, billingSvc *billing.Service, storageSvc *storage.Local, openAIClient *openai.Client, configSvc *systemconfig.Service) *Service {
+	return &Service{cfg: cfg, db: db, pricing: pricingSvc, billing: billingSvc, storage: storageSvc, openai: openAIClient, configs: configSvc}
 }
 
 const (
@@ -75,6 +77,9 @@ const (
 func (s *Service) CreatePending(ctx context.Context, req CreateRequest) (Generation, error) {
 	req = normalize(req, s.cfg.DefaultImageModel)
 	if err := validate(req); err != nil {
+		return Generation{}, err
+	}
+	if err := s.validateResolutionLimit(ctx, req.Size); err != nil {
 		return Generation{}, err
 	}
 	if req.ReferenceKeys == nil {
@@ -503,6 +508,27 @@ func validate(req CreateRequest) error {
 	case "low", "medium", "high", "auto":
 	default:
 		return errors.New("unsupported quality")
+	}
+	return nil
+}
+
+func (s *Service) validateResolutionLimit(ctx context.Context, size string) error {
+	if s.configs == nil {
+		return nil
+	}
+	maxBucket, err := s.configs.MaxResolutionBucket(ctx)
+	if err != nil {
+		return err
+	}
+	if maxBucket != "2k" {
+		return nil
+	}
+	bucket, err := pricing.ResolutionBucket(size)
+	if err != nil {
+		return err
+	}
+	if bucket == "4k" {
+		return errors.New("4K image generation is disabled")
 	}
 	return nil
 }

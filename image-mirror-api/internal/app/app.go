@@ -72,7 +72,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 	openAIClient := openai.NewClient(cfg.OpenAITimeout, func(ctx context.Context) (string, string, error) {
 		return systemConfigSvc.GetOpenAI(ctx, cfg.OpenAIAPIKey, cfg.OpenAIBaseURL)
 	})
-	imagesSvc := images.NewService(cfg, db, pricingSvc, billingSvc, storageSvc, openAIClient)
+	imagesSvc := images.NewService(cfg, db, pricingSvc, billingSvc, storageSvc, openAIClient, systemConfigSvc)
 	paymentSvc := payments.NewService(db, systemConfigSvc, cfg.PublicBaseURL)
 	redemptionSvc := redemptions.NewService(db)
 	contentSvc := content.NewService(db, storageSvc)

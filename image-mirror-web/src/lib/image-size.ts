@@ -2,6 +2,8 @@ export const resolutionBuckets = ["1k", "2k", "4k"] as const
 const minImagePixels = 655360
 const maxImageEdge = 3840
 const maxImagePixels = 3840 * 2160
+const max2kImageEdge = 2048
+const max2kImagePixels = 2048 * 2048
 
 export type ResolutionBucket = (typeof resolutionBuckets)[number]
 
@@ -16,7 +18,7 @@ export function resolutionBucket(width: number, height: number): ResolutionBucke
   return "4k"
 }
 
-export function validateImageSize(width: number, height: number) {
+export function validateImageSize(width: number, height: number, maxBucket: ResolutionBucket = "4k") {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return "宽高必须大于 0"
   }
@@ -34,6 +36,14 @@ export function validateImageSize(width: number, height: number) {
   }
   if (width * 3 < height || height * 3 < width) {
     return "宽高比例必须在 1:3 到 3:1 之间"
+  }
+  if (maxBucket === "2k") {
+    if (width > max2kImageEdge || height > max2kImageEdge) {
+      return "当前最大支持 2K，最长边不能超过 2048"
+    }
+    if (width * height > max2kImagePixels) {
+      return "当前最大支持 2K，总像素不能超过 2048x2048"
+    }
   }
   return null
 }

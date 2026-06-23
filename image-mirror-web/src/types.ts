@@ -92,6 +92,11 @@ export type EPaySettings = {
   enabled: boolean
 }
 
+export type PlatformSettings = {
+  maxResolutionBucket: "2k" | "4k"
+  allow4k: boolean
+}
+
 export type PaymentOrder = {
   id: string
   userId: string

@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { downloadImage, expiresIn } from "@/lib/format"
 import { resolutionBucket, sizeString, validateImageSize } from "@/lib/image-size"
 import { useAuthStore } from "@/stores/auth"
-import type { ImageGeneration, PricingRule } from "@/types"
+import type { ImageGeneration, PlatformSettings, PricingRule } from "@/types"
 
 const qualityOptions = ["low", "medium", "high", "auto"]
 
@@ -29,15 +29,21 @@ export function GeneratePage() {
   const [height, setHeight] = useState(1024)
   const [quality, setQuality] = useState("medium")
   const [pricing, setPricing] = useState<PricingRule[]>([])
+  const [platform, setPlatform] = useState<PlatformSettings>({ maxResolutionBucket: "4k", allow4k: true })
   const [current, setCurrent] = useState<ImageGeneration | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [referenceFiles, setReferenceFiles] = useState<File[]>([])
   const [fileInputKey, setFileInputKey] = useState(0)
 
   useEffect(() => {
-    api
-      .get<{ data: PricingRule[] }>("/api/pricing")
-      .then((response) => setPricing(response.data.data ?? []))
+    Promise.all([
+      api.get<{ data: PricingRule[] }>("/api/pricing"),
+      api.get<PlatformSettings>("/api/settings/platform"),
+    ])
+      .then(([pricingResponse, platformResponse]) => {
+        setPricing(pricingResponse.data.data ?? [])
+        setPlatform(platformResponse.data)
+      })
       .catch((error) => toast.error(errorMessage(error)))
   }, [])
 
@@ -46,9 +52,11 @@ export function GeneratePage() {
     return pricing.find((rule) => rule.model === "gpt-image-2" && rule.size === bucket && rule.quality === quality)?.credits
   }, [height, pricing, quality, width])
 
-  const sizeError = useMemo(() => validateImageSize(width, height), [height, width])
+  const sizeError = useMemo(() => validateImageSize(width, height, platform.maxResolutionBucket), [height, platform.maxResolutionBucket, width])
   const size = sizeString(width, height)
   const bucket = resolutionBucket(width, height)
+  const maxEdge = platform.allow4k ? 3840 : 2048
+  const maxHeight = platform.allow4k ? 2160 : 2048
 
   useEffect(() => {
     if (!current || current.status === "COMPLETED" || current.status === "FAILED" || current.status === "EXPIRED") return
@@ -141,8 +149,8 @@ export function GeneratePage() {
                 <Field>
                   <FieldLabel>尺寸</FieldLabel>
                   <div className="grid grid-cols-2 gap-2">
-                    <Input aria-label="宽度" type="number" min={16} max={3840} step={16} value={width} onChange={(event) => setWidth(Number(event.target.value))} />
-                    <Input aria-label="高度" type="number" min={16} max={2160} step={16} value={height} onChange={(event) => setHeight(Number(event.target.value))} />
+                    <Input aria-label="宽度" type="number" min={16} max={maxEdge} step={16} value={width} onChange={(event) => setWidth(Number(event.target.value))} />
+                    <Input aria-label="高度" type="number" min={16} max={maxHeight} step={16} value={height} onChange={(event) => setHeight(Number(event.target.value))} />
                   </div>
                   <FieldDescription>{sizeError ?? `当前按 ${bucket.toUpperCase()} 档计费`}</FieldDescription>
                 </Field>

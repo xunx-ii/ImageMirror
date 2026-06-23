@@ -88,16 +88,13 @@ func (s *Service) ensureAnotherActiveAdmin(ctx context.Context, targetID string)
 
 func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	var out Overview
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&out.Users); err != nil {
-		return out, err
-	}
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM image_generations`).Scan(&out.Images); err != nil {
-		return out, err
-	}
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM image_generations WHERE status='COMPLETED'`).Scan(&out.Completed); err != nil {
-		return out, err
-	}
-	if err := s.db.QueryRow(ctx, `SELECT COALESCE(abs(sum(amount)),0) FROM credit_transactions WHERE type='CONSUME'`).Scan(&out.CreditsConsumed); err != nil {
+	if err := s.db.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM users),
+			(SELECT count(*) FROM image_generations),
+			(SELECT count(*) FROM image_generations WHERE status='COMPLETED'),
+			(SELECT COALESCE(abs(sum(amount)),0) FROM credit_transactions WHERE type='CONSUME')
+	`).Scan(&out.Users, &out.Images, &out.Completed, &out.CreditsConsumed); err != nil {
 		return out, err
 	}
 	return out, nil
