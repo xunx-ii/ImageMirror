@@ -246,6 +246,7 @@ func (s *Service) Process(ctx context.Context, imageID string) error {
 		WHERE id=$1 AND status='PROCESSING'
 	`, imageID, key, storageURL)
 	if err != nil {
+		_ = s.storage.DeleteImage(ctx, key)
 		return err
 	}
 	if completedTag.RowsAffected() == 0 {

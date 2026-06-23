@@ -83,7 +83,11 @@ func (s *Local) write(ctx context.Context, key string, data []byte) (string, err
 		_ = os.Remove(tmp)
 		return "", err
 	}
-	return key, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return key, nil
 }
 
 func (s *Local) ReadImage(_ context.Context, key string) ([]byte, error) {

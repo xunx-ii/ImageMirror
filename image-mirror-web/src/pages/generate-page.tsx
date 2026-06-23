@@ -93,6 +93,10 @@ export function GeneratePage() {
       toast.error(sizeError)
       return
     }
+    if (cost == null) {
+      toast.error("当前尺寸和质量没有配置定价")
+      return
+    }
     setSubmitting(true)
     try {
       const form = new FormData()
@@ -212,7 +216,7 @@ export function GeneratePage() {
                 <span className="text-sm text-muted-foreground">本次预扣</span>
                 <Badge variant="secondary">{cost ?? "-"} credits</Badge>
               </div>
-              <Button disabled={submitting || busy || !prompt.trim() || !!sizeError} type="submit">
+              <Button disabled={submitting || busy || !prompt.trim() || !!sizeError || cost == null} type="submit">
                 {submitting || busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Sparkles data-icon="inline-start" />}
                 {submitting ? "提交中" : busy ? "生成中" : "生成图片"}
               </Button>

@@ -101,7 +101,7 @@ func (s *Service) Disable(ctx context.Context, ids []string) (int64, error) {
 	tag, err := s.db.Exec(ctx, `
 		UPDATE redemption_codes
 		SET status='DISABLED', updated_at=now()
-		WHERE id=ANY($1) AND status='ACTIVE' AND used_at IS NULL
+		WHERE id=ANY($1::uuid[]) AND status='ACTIVE' AND used_at IS NULL
 	`, ids)
 	if err != nil {
 		return 0, err
@@ -110,7 +110,7 @@ func (s *Service) Disable(ctx context.Context, ids []string) (int64, error) {
 }
 
 func (s *Service) Delete(ctx context.Context, ids []string) (int64, error) {
-	tag, err := s.db.Exec(ctx, `DELETE FROM redemption_codes WHERE id=ANY($1)`, ids)
+	tag, err := s.db.Exec(ctx, `DELETE FROM redemption_codes WHERE id=ANY($1::uuid[])`, ids)
 	if err != nil {
 		return 0, err
 	}

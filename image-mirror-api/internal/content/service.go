@@ -118,7 +118,12 @@ func (s *Service) UploadAsset(ctx context.Context, kind string, userID string, h
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id, kind, filename, storage_key, url, created_at
 	`, id, kind, header.Filename, key, url, nullableString(userID))
-	return scanAsset(row)
+	asset, err := scanAsset(row)
+	if err != nil {
+		_ = s.storage.DeleteImage(ctx, key)
+		return Asset{}, err
+	}
+	return asset, nil
 }
 
 func (s *Service) ReadAsset(ctx context.Context, id string) ([]byte, string, error) {

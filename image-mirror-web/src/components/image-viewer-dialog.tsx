@@ -15,6 +15,13 @@ type ImageViewerDialogProps = {
   onOpenChange: (open: boolean) => void
 }
 
+type ViewState = {
+  imageKey: string
+  scale: number
+  x: number
+  y: number
+}
+
 export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDialogProps) {
   const imageKey = open && image ? image.id : ""
   const viewportRef = useRef<HTMLDivElement | null>(null)
@@ -27,7 +34,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     translateY: number
   } | null>(null)
   const viewRef = useRef({ scale: 1, x: 0, y: 0 })
-  const [viewState, setViewState] = useState({ imageKey: "", scale: 1, x: 0, y: 0 })
+  const [viewState, setViewState] = useState<ViewState>({ imageKey: "", scale: 1, x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const activeView = viewState.imageKey === imageKey ? viewState : { imageKey, scale: 1, x: 0, y: 0 }
   const scale = activeView.scale
@@ -38,10 +45,10 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     imageKeyRef.current = imageKey
   }, [activeView.scale, activeView.x, activeView.y, imageKey])
 
-  function setView(next: { imageKey: string; scale: number; x: number; y: number }) {
+  const setView = useCallback((next: ViewState) => {
     viewRef.current = { scale: next.scale, x: next.x, y: next.y }
     setViewState(next)
-  }
+  }, [])
 
   const zoomAt = useCallback((delta: number, origin?: { clientX: number; clientY: number }) => {
     const node = viewportRef.current
@@ -65,7 +72,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
       x: previous.x * ratio + originX * (1 - ratio),
       y: previous.y * ratio + originY * (1 - ratio),
     })
-  }, [])
+  }, [setView])
 
   useEffect(() => {
     if (!canView) return
@@ -137,7 +144,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     if (!nextOpen) {
       dragRef.current = null
       setDragging(false)
-      setViewState({ imageKey: "", scale: 1, x: 0, y: 0 })
+      setView({ imageKey: "", scale: 1, x: 0, y: 0 })
     }
     onOpenChange(nextOpen)
   }
