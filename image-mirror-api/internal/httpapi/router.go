@@ -322,6 +322,7 @@ func contentAssetHandler(contentSvc *content.Service) gin.HandlerFunc {
 			Abort(c, NewError(http.StatusNotFound, "asset is not available", err))
 			return
 		}
+		c.Header("Cache-Control", "public, max-age=86400")
 		c.Data(http.StatusOK, contentType, data)
 	}
 }
@@ -481,7 +482,11 @@ func developerGenerateHandler(s Services) gin.HandlerFunc {
 				return
 			}
 			if current.Status == "FAILED" || current.Status == "EXPIRED" {
-				Abort(c, NewError(http.StatusBadGateway, "image generation failed", errors.New("image generation failed")))
+				message := "image generation failed"
+				if current.ErrorMessage != nil && strings.TrimSpace(*current.ErrorMessage) != "" {
+					message = *current.ErrorMessage
+				}
+				Abort(c, NewError(http.StatusBadGateway, message, errors.New(message)))
 				return
 			}
 			select {
@@ -524,8 +529,12 @@ func imageFileHandler(svc *images.Service) gin.HandlerFunc {
 			Abort(c, NewError(http.StatusNotFound, "image file is not available", err))
 			return
 		}
+		contentType := http.DetectContentType(bytes)
+		if !strings.HasPrefix(contentType, "image/") {
+			contentType = "image/png"
+		}
 		c.Header("Cache-Control", "private, max-age=300")
-		c.Data(http.StatusOK, "image/png", bytes)
+		c.Data(http.StatusOK, contentType, bytes)
 	}
 }
 
@@ -900,10 +909,20 @@ func adminUpdateUserStatusHandler(s Services) gin.HandlerFunc {
 func adminDeleteUserHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		targetID := c.Param("id")
+		if err := s.Admin.EnsureCanDeleteUser(c.Request.Context(), CurrentUserID(c), targetID); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		refs, err := s.Images.FileRefsForUser(c.Request.Context(), targetID)
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
 		if err := s.Admin.DeleteUser(c.Request.Context(), CurrentUserID(c), targetID); err != nil {
 			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
 			return
 		}
+		_ = s.Images.DeleteFileRefs(c.Request.Context(), refs)
 		_ = s.Auth.InvalidateUserStatus(c.Request.Context(), targetID)
 		OK(c, gin.H{"ok": true})
 	}

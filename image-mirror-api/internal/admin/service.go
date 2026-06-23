@@ -60,6 +60,13 @@ func (s *Service) SetUserStatus(ctx context.Context, actorID string, targetID st
 }
 
 func (s *Service) DeleteUser(ctx context.Context, actorID string, targetID string) error {
+	if err := s.EnsureCanDeleteUser(ctx, actorID, targetID); err != nil {
+		return err
+	}
+	return s.users.Delete(ctx, targetID)
+}
+
+func (s *Service) EnsureCanDeleteUser(ctx context.Context, actorID string, targetID string) error {
 	if actorID == targetID {
 		return errors.New("cannot delete your own account")
 	}
@@ -72,7 +79,7 @@ func (s *Service) DeleteUser(ctx context.Context, actorID string, targetID strin
 			return err
 		}
 	}
-	return s.users.Delete(ctx, targetID)
+	return nil
 }
 
 func (s *Service) ensureAnotherActiveAdmin(ctx context.Context, targetID string) error {

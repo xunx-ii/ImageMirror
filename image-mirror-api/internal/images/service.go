@@ -45,6 +45,11 @@ type Generation struct {
 	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
+type FileRef struct {
+	StorageKey    *string
+	ReferenceKeys []string
+}
+
 type CreateRequest struct {
 	UserID        string
 	APIKeyID      *string
@@ -391,11 +396,16 @@ func (s *Service) DeleteForUser(ctx context.Context, userID string, imageID stri
 
 func (s *Service) DeleteManyForUser(ctx context.Context, userID string, imageIDs []string) (int, error) {
 	count := 0
+	seen := make(map[string]struct{}, len(imageIDs))
 	for _, imageID := range imageIDs {
 		imageID = strings.TrimSpace(imageID)
 		if imageID == "" {
 			continue
 		}
+		if _, ok := seen[imageID]; ok {
+			continue
+		}
+		seen[imageID] = struct{}{}
 		if err := s.DeleteForUser(ctx, userID, imageID); err != nil {
 			return count, err
 		}
@@ -408,11 +418,16 @@ func (s *Service) ZipFilesForUser(ctx context.Context, userID string, imageIDs [
 	buffer := &bytes.Buffer{}
 	writer := zip.NewWriter(buffer)
 	added := 0
+	seen := make(map[string]struct{}, len(imageIDs))
 	for _, imageID := range imageIDs {
 		imageID = strings.TrimSpace(imageID)
 		if imageID == "" {
 			continue
 		}
+		if _, ok := seen[imageID]; ok {
+			continue
+		}
+		seen[imageID] = struct{}{}
 		data, gen, err := s.ReadFile(ctx, userID, imageID)
 		if err != nil {
 			return nil, err
@@ -434,6 +449,52 @@ func (s *Service) ZipFilesForUser(ctx context.Context, userID string, imageIDs [
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func (s *Service) DeleteFilesForUser(ctx context.Context, userID string) error {
+	refs, err := s.FileRefsForUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	return s.DeleteFileRefs(ctx, refs)
+}
+
+func (s *Service) FileRefsForUser(ctx context.Context, userID string) ([]FileRef, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT storage_key, reference_keys
+		FROM image_generations
+		WHERE user_id=$1
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]FileRef, 0)
+	for rows.Next() {
+		var item FileRef
+		var refs []byte
+		if err := rows.Scan(&item.StorageKey, &refs); err != nil {
+			return nil, err
+		}
+		if len(refs) > 0 {
+			if err := json.Unmarshal(refs, &item.ReferenceKeys); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) DeleteFileRefs(ctx context.Context, refs []FileRef) error {
+	for _, item := range refs {
+		if item.StorageKey != nil {
+			_ = s.storage.DeleteImage(ctx, *item.StorageKey)
+		}
+		s.deleteReferenceImages(ctx, item.ReferenceKeys)
+	}
+	return nil
 }
 
 func (s *Service) ExpireOld(ctx context.Context, limit int32) (int, error) {

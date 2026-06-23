@@ -90,6 +90,10 @@ func RateLimit(redisClient *redis.Client, limit int) gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		if shouldSkipRateLimit(c) {
+			c.Next()
+			return
+		}
 		identity := c.ClientIP()
 		if userID, ok := c.Get(ContextUserID); ok {
 			identity = userID.(string)
@@ -108,6 +112,14 @@ func RateLimit(redisClient *redis.Client, limit int) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+func shouldSkipRateLimit(c *gin.Context) bool {
+	if c.Request.Method != http.MethodGet {
+		return false
+	}
+	path := c.Request.URL.Path
+	return (strings.HasPrefix(path, "/api/images/") || strings.HasPrefix(path, "/v1/images/")) && strings.HasSuffix(path, "/file")
 }
 
 func CurrentUserID(c *gin.Context) string {

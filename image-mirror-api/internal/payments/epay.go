@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -79,8 +80,10 @@ func (s *Service) CreateEPayOrder(ctx context.Context, userID string, amountCent
 	if credits <= 0 {
 		credits = 1
 	}
-	outTradeNo := fmt.Sprintf("IM%s", time.Now().UTC().Format("20060102150405.000000000"))
-	outTradeNo = strings.ReplaceAll(outTradeNo, ".", "")
+	outTradeNo, err := randomOutTradeNo()
+	if err != nil {
+		return CreateOrderResult{}, err
+	}
 	name := settings.Name
 	if name == "" {
 		name = "ImageMirror credits"
@@ -241,7 +244,15 @@ func verify(values url.Values, key string) bool {
 }
 
 func formatMoney(cents int64) string {
-	return strconv.FormatFloat(float64(cents)/100, 'f', 2, 64)
+	return fmt.Sprintf("%d.%02d", cents/100, cents%100)
+}
+
+func randomOutTradeNo() (string, error) {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("IM%s%s", time.Now().UTC().Format("20060102150405"), strings.ToUpper(hex.EncodeToString(suffix[:]))), nil
 }
 
 func normalizePayType(payType string) (string, error) {

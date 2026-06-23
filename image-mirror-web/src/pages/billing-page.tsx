@@ -109,7 +109,7 @@ export function BillingPage() {
                       type="number"
                       min={1}
                       value={amount}
-                      onChange={(event) => setAmount(Number(event.target.value))}
+                      onChange={(event) => setAmount(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
                       required
                     />
                     <FieldDescription>单位：人民币元。提交后会跳转到易支付，到账积分按后台配置兑换。</FieldDescription>

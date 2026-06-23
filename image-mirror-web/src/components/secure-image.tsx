@@ -42,11 +42,12 @@ export function SecureImage({ imageId, alt, className, style, loading = "lazy", 
 
   useEffect(() => {
     if (!shouldLoad) return
+    const controller = new AbortController()
     let revoked: string | null = null
     let cancelled = false
 
     api
-      .get<Blob>(`/api/images/${imageId}/file`, { responseType: "blob" })
+      .get<Blob>(`/api/images/${imageId}/file`, { responseType: "blob", signal: controller.signal })
       .then((response) => {
         if (cancelled) return
         revoked = URL.createObjectURL(response.data)
@@ -58,6 +59,7 @@ export function SecureImage({ imageId, alt, className, style, loading = "lazy", 
 
     return () => {
       cancelled = true
+      controller.abort()
       if (revoked) URL.revokeObjectURL(revoked)
     }
   }, [imageId, shouldLoad])

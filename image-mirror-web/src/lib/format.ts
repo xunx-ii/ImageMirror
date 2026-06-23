@@ -23,11 +23,7 @@ export async function downloadImage(imageId: string) {
     responseType: "blob",
   })
   const url = URL.createObjectURL(response.data)
-  const anchor = document.createElement("a")
-  anchor.href = url
-  anchor.download = `${imageId}.png`
-  anchor.click()
-  URL.revokeObjectURL(url)
+  triggerDownload(url, `${imageId}.png`)
 }
 
 export async function downloadSelectedImages(imageIds: string[]) {
@@ -37,9 +33,16 @@ export async function downloadSelectedImages(imageIds: string[]) {
     { responseType: "blob" }
   )
   const url = URL.createObjectURL(response.data)
+  triggerDownload(url, "image-mirror-selected.zip")
+}
+
+function triggerDownload(url: string, filename: string) {
   const anchor = document.createElement("a")
   anchor.href = url
-  anchor.download = "image-mirror-selected.zip"
+  anchor.download = filename
+  anchor.rel = "noopener"
+  document.body.appendChild(anchor)
   anchor.click()
-  URL.revokeObjectURL(url)
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }

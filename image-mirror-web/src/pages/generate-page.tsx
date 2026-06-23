@@ -22,6 +22,12 @@ import type { ImageGeneration, PlatformSettings, PricingRule } from "@/types"
 
 const qualityOptions = ["low", "medium", "high", "auto"]
 
+function parseDimension(value: string, fallback: number) {
+  const next = Number(value)
+  if (!Number.isFinite(next)) return fallback
+  return Math.max(16, Math.floor(next))
+}
+
 export function GeneratePage() {
   const refreshMe = useAuthStore((state) => state.refreshMe)
   const [prompt, setPrompt] = useState("A clean product-style image of a glass teapot on a walnut desk, soft daylight")
@@ -149,8 +155,8 @@ export function GeneratePage() {
                 <Field>
                   <FieldLabel>尺寸</FieldLabel>
                   <div className="grid grid-cols-2 gap-2">
-                    <Input aria-label="宽度" type="number" min={16} max={maxEdge} step={16} value={width} onChange={(event) => setWidth(Number(event.target.value))} />
-                    <Input aria-label="高度" type="number" min={16} max={maxHeight} step={16} value={height} onChange={(event) => setHeight(Number(event.target.value))} />
+                    <Input aria-label="宽度" type="number" min={16} max={maxEdge} step={16} value={width} onChange={(event) => setWidth((current) => parseDimension(event.target.value, current))} />
+                    <Input aria-label="高度" type="number" min={16} max={maxHeight} step={16} value={height} onChange={(event) => setHeight((current) => parseDimension(event.target.value, current))} />
                   </div>
                   <FieldDescription>{sizeError ?? `当前按 ${bucket.toUpperCase()} 档计费`}</FieldDescription>
                 </Field>

@@ -5,6 +5,9 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/linxunxi/image-mirror/internal/users"
 )
 
 var (
@@ -54,6 +57,9 @@ func Abort(c *gin.Context, err error) {
 		case errors.Is(err, ErrBadRequest):
 			status = http.StatusBadRequest
 			message = "bad request"
+		case errors.Is(err, pgx.ErrNoRows), errors.Is(err, users.ErrUserNotFound):
+			status = http.StatusNotFound
+			message = "not found"
 		}
 	}
 

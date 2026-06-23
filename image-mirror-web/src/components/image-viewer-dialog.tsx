@@ -18,48 +18,48 @@ type ImageViewerDialogProps = {
 export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDialogProps) {
   const imageKey = open && image ? image.id : ""
   const viewportRef = useRef<HTMLDivElement | null>(null)
-  const scaleRef = useRef(1)
   const imageKeyRef = useRef("")
   const dragRef = useRef<{
     pointerId: number
     x: number
     y: number
-    scrollLeft: number
-    scrollTop: number
+    translateX: number
+    translateY: number
   } | null>(null)
-  const [scaleState, setScaleState] = useState({ imageKey: "", value: 1 })
+  const viewRef = useRef({ scale: 1, x: 0, y: 0 })
+  const [viewState, setViewState] = useState({ imageKey: "", scale: 1, x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
-  const scale = scaleState.imageKey === imageKey ? scaleState.value : 1
+  const activeView = viewState.imageKey === imageKey ? viewState : { imageKey, scale: 1, x: 0, y: 0 }
+  const scale = activeView.scale
   const canView = image?.status === "COMPLETED"
 
   useEffect(() => {
-    scaleRef.current = scale
+    viewRef.current = { scale: activeView.scale, x: activeView.x, y: activeView.y }
     imageKeyRef.current = imageKey
-  }, [imageKey, scale])
+  }, [activeView.scale, activeView.x, activeView.y, imageKey])
 
   const zoomAt = useCallback((delta: number, origin?: { clientX: number; clientY: number }) => {
     const node = viewportRef.current
-    const previous = scaleRef.current
-    const next = Math.min(4, Math.max(0.25, Number((previous + delta).toFixed(2))))
-    if (next === previous) return
+    const previous = viewRef.current
+    const nextScale = Math.min(4, Math.max(0.25, Number((previous.scale + delta).toFixed(2))))
+    if (nextScale === previous.scale) return
 
-    if (origin && node) {
-      const rect = node.getBoundingClientRect()
-      const offsetX = origin.clientX - rect.left
-      const offsetY = origin.clientY - rect.top
-      const scrollLeft = node.scrollLeft
-      const scrollTop = node.scrollTop
-      const ratio = next / previous
-
-      setScaleState({ imageKey: imageKeyRef.current, value: next })
-      window.requestAnimationFrame(() => {
-        node.scrollLeft = (scrollLeft + offsetX) * ratio - offsetX
-        node.scrollTop = (scrollTop + offsetY) * ratio - offsetY
-      })
+    if (!origin || !node || nextScale <= 1) {
+      setViewState({ imageKey: imageKeyRef.current, scale: nextScale, x: 0, y: 0 })
       return
     }
 
-    setScaleState({ imageKey: imageKeyRef.current, value: next })
+    const rect = node.getBoundingClientRect()
+    const originX = origin.clientX - rect.left - rect.width / 2
+    const originY = origin.clientY - rect.top - rect.height / 2
+    const ratio = nextScale / previous.scale
+
+    setViewState({
+      imageKey: imageKeyRef.current,
+      scale: nextScale,
+      x: previous.x * ratio + originX * (1 - ratio),
+      y: previous.y * ratio + originY * (1 - ratio),
+    })
   }, [])
 
   useEffect(() => {
@@ -72,8 +72,8 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
       zoomAt(event.deltaY < 0 ? 0.1 : -0.1, event)
     }
 
-    node.addEventListener("wheel", handleNativeWheel, { passive: false })
-    return () => node.removeEventListener("wheel", handleNativeWheel)
+    node.addEventListener("wheel", handleNativeWheel, { passive: false, capture: true })
+    return () => node.removeEventListener("wheel", handleNativeWheel, { capture: true })
   }, [canView, zoomAt])
 
   function zoom(delta: number) {
@@ -83,14 +83,11 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
   }
 
   function resetScale() {
-    setScaleState({ imageKey, value: 1 })
-    window.requestAnimationFrame(() => {
-      viewportRef.current?.scrollTo({ left: 0, top: 0 })
-    })
+    setViewState({ imageKey, scale: 1, x: 0, y: 0 })
   }
 
   function startDrag(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!canView || event.button !== 0) return
+    if (!canView || event.button !== 0 || viewRef.current.scale <= 1) return
     const node = viewportRef.current
     if (!node) return
 
@@ -100,8 +97,8 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      scrollLeft: node.scrollLeft,
-      scrollTop: node.scrollTop,
+      translateX: viewRef.current.x,
+      translateY: viewRef.current.y,
     }
     setDragging(true)
   }
@@ -112,8 +109,12 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
     if (!node || !drag || drag.pointerId !== event.pointerId) return
 
     event.preventDefault()
-    node.scrollLeft = drag.scrollLeft - (event.clientX - drag.x)
-    node.scrollTop = drag.scrollTop - (event.clientY - drag.y)
+    setViewState({
+      imageKey: imageKeyRef.current,
+      scale: viewRef.current.scale,
+      x: drag.translateX + event.clientX - drag.x,
+      y: drag.translateY + event.clientY - drag.y,
+    })
   }
 
   function stopDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -127,13 +128,17 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
   }
 
   function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen) setScaleState({ imageKey: "", value: 1 })
+    if (!nextOpen) {
+      dragRef.current = null
+      setDragging(false)
+      setViewState({ imageKey: "", scale: 1, x: 0, y: 0 })
+    }
     onOpenChange(nextOpen)
   }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-[96vw] sm:max-w-5xl">
+      <DialogContent className="max-h-[96svh] max-w-[96vw] overflow-hidden sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle>查看图片</DialogTitle>
         </DialogHeader>
@@ -164,8 +169,8 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
             <div
               ref={viewportRef}
               className={cn(
-                "min-h-[360px] overflow-auto rounded-lg border bg-muted/30 p-3 select-none",
-                canView && (dragging ? "cursor-grabbing" : "cursor-grab")
+                "h-[min(68svh,720px)] min-h-[360px] overflow-hidden rounded-lg border bg-muted/30 p-3 select-none touch-none overscroll-none",
+                canView && scale > 1 && (dragging ? "cursor-grabbing" : "cursor-grab")
               )}
               onPointerDown={startDrag}
               onPointerMove={moveDrag}
@@ -173,13 +178,17 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
               onPointerCancel={stopDrag}
             >
               {canView ? (
-                <div className="flex min-h-[60vh] items-center justify-center">
+                <div className="flex h-full items-center justify-center overflow-hidden">
                   <SecureImage
                     imageId={image.id}
                     alt={image.prompt}
-                    className={cn("rounded-md object-contain", scale <= 1 && "max-h-[70vh] max-w-full")}
+                    className="max-h-[70vh] max-w-full rounded-md object-contain will-change-transform"
                     draggable={false}
-                    style={scale > 1 ? { width: `${Math.round(scale * 100)}%`, maxWidth: "none" } : { width: `${Math.round(scale * 100)}%` }}
+                    loading="eager"
+                    style={{
+                      transform: `translate3d(${activeView.x}px, ${activeView.y}px, 0) scale(${scale})`,
+                      transformOrigin: "center center",
+                    }}
                   />
                 </div>
               ) : (
