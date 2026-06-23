@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { FormEvent } from "react"
-import { Download, ImagePlus, Loader2, RefreshCw, Sparkles, Upload, X } from "lucide-react"
+import { Download, ImagePlus, Loader2, RefreshCw, Sparkles, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
@@ -9,6 +9,7 @@ import { SecureImage } from "@/components/secure-image"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -20,7 +21,27 @@ import { resolutionBucket, sizeString, validateImageSize } from "@/lib/image-siz
 import { useAuthStore } from "@/stores/auth"
 import type { ImageGeneration, PlatformSettings, PricingRule } from "@/types"
 
-const qualityOptions = ["low", "medium", "high", "auto"]
+const qualityOptions = [
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "auto", label: "自动" },
+]
+
+type ReferencePreview = {
+  id: string
+  file: File
+  url: string
+}
+
+function createReferenceId(file: File) {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID()
+  return `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`
+}
+
+function qualityLabel(value: string) {
+  return qualityOptions.find((item) => item.value === value)?.label ?? value
+}
 
 function parseDimension(value: string, fallback: number) {
   const next = Number(value)
@@ -30,7 +51,8 @@ function parseDimension(value: string, fallback: number) {
 
 export function GeneratePage() {
   const refreshMe = useAuthStore((state) => state.refreshMe)
-  const [prompt, setPrompt] = useState("A clean product-style image of a glass teapot on a walnut desk, soft daylight")
+  const referenceUrlRef = useRef<Set<string>>(new Set())
+  const [prompt, setPrompt] = useState("")
   const [width, setWidth] = useState(1024)
   const [height, setHeight] = useState(1024)
   const [quality, setQuality] = useState("medium")
@@ -38,8 +60,17 @@ export function GeneratePage() {
   const [platform, setPlatform] = useState<PlatformSettings>({ maxResolutionBucket: "4k", allow4k: true })
   const [current, setCurrent] = useState<ImageGeneration | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [referenceFiles, setReferenceFiles] = useState<File[]>([])
+  const [referenceImages, setReferenceImages] = useState<ReferencePreview[]>([])
+  const [previewReference, setPreviewReference] = useState<ReferencePreview | null>(null)
   const [fileInputKey, setFileInputKey] = useState(0)
+
+  useEffect(() => {
+    const urls = referenceUrlRef.current
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url))
+      urls.clear()
+    }
+  }, [])
 
   useEffect(() => {
     Promise.all([
@@ -104,10 +135,10 @@ export function GeneratePage() {
       form.append("prompt", prompt)
       form.append("size", size)
       form.append("quality", quality)
-      referenceFiles.forEach((file) => form.append("referenceImages", file))
+      referenceImages.forEach((image) => form.append("referenceImages", image.file))
       const { data } = await api.post<{ image: ImageGeneration }>("/api/images/generate", form)
       setCurrent(data.image)
-      setReferenceFiles([])
+      clearReferenceImages()
       setFileInputKey((value) => value + 1)
       toast.success("任务已提交")
       void refreshMe()
@@ -124,17 +155,38 @@ export function GeneratePage() {
     if (accepted.length !== files.length) {
       toast.error("只能选择图片文件")
     }
-    setReferenceFiles((state) => {
-      const next = [...state, ...accepted].slice(0, 4)
-      if (state.length + accepted.length > 4) {
-        toast.error("最多提交 4 张参考图")
-      }
-      return next
+    if (accepted.length === 0) return
+    const slots = Math.max(0, 4 - referenceImages.length)
+    if (slots === 0) {
+      toast.error("最多提交 4 张参考图")
+      return
+    }
+    const selected = accepted.slice(0, slots)
+    if (accepted.length > slots) {
+      toast.error("最多提交 4 张参考图")
+    }
+    const previews = selected.map((file) => {
+      const url = URL.createObjectURL(file)
+      referenceUrlRef.current.add(url)
+      return { id: createReferenceId(file), file, url }
     })
+    setReferenceImages((state) => [...state, ...previews])
   }
 
-  function removeReferenceFile(index: number) {
-    setReferenceFiles((state) => state.filter((_, itemIndex) => itemIndex !== index))
+  function removeReferenceImage(id: string) {
+    const target = referenceImages.find((image) => image.id === id)
+    if (!target) return
+    URL.revokeObjectURL(target.url)
+    referenceUrlRef.current.delete(target.url)
+    setReferenceImages((state) => state.filter((image) => image.id !== id))
+    if (previewReference?.id === id) setPreviewReference(null)
+  }
+
+  function clearReferenceImages() {
+    referenceUrlRef.current.forEach((url) => URL.revokeObjectURL(url))
+    referenceUrlRef.current.clear()
+    setReferenceImages([])
+    setPreviewReference(null)
   }
 
   const busy = current?.status === "PENDING" || current?.status === "PROCESSING"
@@ -173,8 +225,8 @@ export function GeneratePage() {
                     <SelectContent>
                       <SelectGroup>
                         {qualityOptions.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {item}
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
                           </SelectItem>
                         ))}
                       </SelectGroup>
@@ -189,27 +241,33 @@ export function GeneratePage() {
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
                     multiple
-                    onChange={(event) => addReferenceFiles(event.target.files)}
+                    onChange={(event) => {
+                      addReferenceFiles(event.target.files)
+                      event.currentTarget.value = ""
+                    }}
                   />
                   <FieldDescription>可选，最多 4 张 PNG、JPG 或 WEBP。</FieldDescription>
                 </Field>
               </FieldGroup>
-              {referenceFiles.length > 0 && (
-                <div className="flex flex-col gap-2 rounded-lg border bg-muted/20 p-3">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Upload />
-                    {referenceFiles.length} 张参考图
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {referenceFiles.map((file, index) => (
-                      <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-md bg-background px-3 py-2 text-sm">
-                        <span className="truncate">{file.name}</span>
-                        <Button type="button" variant="ghost" size="icon" aria-label="移除参考图" onClick={() => removeReferenceFile(index)}>
+              {referenceImages.length > 0 && (
+                <div className="grid grid-cols-4 gap-2 rounded-lg border bg-muted/20 p-3">
+                  {referenceImages.map((image) => (
+                    <div key={image.id} className="group relative aspect-square overflow-hidden rounded-lg border bg-background">
+                      <button type="button" className="h-full w-full" aria-label="查看参考图" onClick={() => setPreviewReference(image)}>
+                        <img src={image.url} alt={image.file.name} className="h-full w-full object-cover" />
+                      </button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="icon-xs"
+                        className="absolute top-1 right-1 bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                        aria-label="移除参考图"
+                        onClick={() => removeReferenceImage(image.id)}
+                      >
                           <X />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
+                      </Button>
+                    </div>
+                  ))}
                 </div>
               )}
               <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3">
@@ -264,7 +322,7 @@ export function GeneratePage() {
                 <SecureImage imageId={current.id} alt={current.prompt} className="max-h-[620px] w-full rounded-lg object-contain" />
                 <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                   <Badge variant="secondary">{current.size}</Badge>
-                  <Badge variant="secondary">{current.quality}</Badge>
+                  <Badge variant="secondary">{qualityLabel(current.quality)}</Badge>
                   {current.referenceCount > 0 && <Badge variant="secondary">参考图 {current.referenceCount}</Badge>}
                   <span>过期倒计时 {expiresIn(current.expiresAt)}</span>
                 </div>
@@ -275,6 +333,18 @@ export function GeneratePage() {
           </CardContent>
         </Card>
       </div>
+      <Dialog open={!!previewReference} onOpenChange={(open) => !open && setPreviewReference(null)}>
+        <DialogContent className="max-h-[96svh] max-w-[96vw] overflow-hidden sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>查看参考图</DialogTitle>
+          </DialogHeader>
+          {previewReference && (
+            <div className="flex max-h-[82vh] items-center justify-center overflow-hidden rounded-lg border bg-muted/30 p-3">
+              <img src={previewReference.url} alt={previewReference.file.name} className="max-h-[78vh] w-full rounded-md object-contain" />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

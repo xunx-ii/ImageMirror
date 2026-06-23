@@ -65,8 +65,8 @@ export function AppLayout() {
                 <ImagePlus />
               </div>
               <div className="min-w-0">
-                <div className="font-heading text-base font-semibold">ImageMirror</div>
-                <div className="truncate text-xs text-muted-foreground">OpenAI 图像中转平台</div>
+                <div className="font-heading text-base font-semibold">IM</div>
+                <div className="truncate text-xs text-muted-foreground">AI图像生成平台</div>
               </div>
             </div>
             <Separator />
