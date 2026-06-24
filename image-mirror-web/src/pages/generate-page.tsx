@@ -160,6 +160,7 @@ function statusLabel(value: ImageGeneration["status"]) {
 
 export function GeneratePage() {
   const refreshMe = useAuthStore((state) => state.refreshMe)
+  const user = useAuthStore((state) => state.user)
   const referenceUrlRef = useRef<Set<string>>(new Set())
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -447,7 +448,14 @@ export function GeneratePage() {
 
   return (
     <>
-      <PageHeader title="生成工作台" />
+      <PageHeader
+        title="生成工作台"
+        action={
+          <Badge variant="secondary" className="h-7 px-3 text-sm tabular-nums">
+            余额 {user?.balance ?? 0} credits
+          </Badge>
+        }
+      />
       <div className="grid h-[calc(100svh-170px)] min-h-[560px] gap-4 overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="hidden min-h-0 overflow-hidden rounded-lg border bg-background lg:flex lg:flex-col">
           <div className="flex items-center justify-between gap-2 border-b p-3">
