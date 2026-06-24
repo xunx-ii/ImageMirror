@@ -3,6 +3,7 @@ import {
   Bell,
   FileText,
   GalleryHorizontalEnd,
+  Gift,
   ImagePlus,
   KeyRound,
   LogOut,
@@ -16,11 +17,12 @@ import { api, errorMessage } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
+import { checkinSettingsUpdatedEvent } from "@/lib/checkin"
 import { siteContentUpdatedEvent } from "@/lib/content"
 import { renderMarkdown } from "@/lib/markdown"
 import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle, platformSettingsUpdatedEvent } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { PlatformSettings, SiteContent } from "@/types"
+import type { CheckinResult, CheckinSettings, CheckinStatus, PlatformSettings, SiteContent } from "@/types"
 
 const links = [
   { to: "/generate", label: "生成", icon: ImagePlus },
@@ -37,10 +39,14 @@ export function AppLayout() {
   const user = useAuthStore((state) => state.user)
   const tokens = useAuthStore((state) => state.tokens)
   const logout = useAuthStore((state) => state.logout)
+  const setSession = useAuthStore((state) => state.setSession)
+  const refreshMe = useAuthStore((state) => state.refreshMe)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
   const [announcementOpen, setAnnouncementOpen] = useState(false)
   const [docsVisible, setDocsVisible] = useState(false)
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
+  const [checkinStatus, setCheckinStatus] = useState<CheckinStatus | null>(null)
+  const [checkinLoading, setCheckinLoading] = useState(false)
 
   useEffect(() => {
     pathRef.current = location.pathname
@@ -141,6 +147,56 @@ export function AppLayout() {
     }
   }, [navigate])
 
+  useEffect(() => {
+    let active = true
+    const applySettings = (settings: CheckinSettings) => {
+      setCheckinStatus((state) => ({
+        enabled: settings.enabled,
+        credits: settings.credits,
+        checkedIn: state?.checkedIn ?? false,
+        lastCheckin: state?.lastCheckin,
+      }))
+    }
+    const handleSettingsUpdated = (event: Event) => {
+      applySettings((event as CustomEvent<CheckinSettings>).detail)
+    }
+
+    window.addEventListener(checkinSettingsUpdatedEvent, handleSettingsUpdated)
+    api
+      .get<CheckinStatus>("/api/checkin/status")
+      .then((response) => {
+        if (active) setCheckinStatus(response.data)
+      })
+      .catch((error) => {
+        const status = (error as { response?: { status?: number } }).response?.status
+        if (status !== 404) toast.error(errorMessage(error))
+      })
+    return () => {
+      active = false
+      window.removeEventListener(checkinSettingsUpdatedEvent, handleSettingsUpdated)
+    }
+  }, [tokens?.accessToken, user?.id])
+
+  async function checkin() {
+    if (!tokens) return
+    setCheckinLoading(true)
+    try {
+      const { data } = await api.post<CheckinResult>("/api/checkin")
+      setCheckinStatus(data.status)
+      setSession(data.user, tokens)
+      toast.success(`签到成功，获得 ${data.status.credits} credits`)
+      await refreshMe()
+    } catch (error) {
+      toast.error(errorMessage(error))
+      void api
+        .get<CheckinStatus>("/api/checkin/status")
+        .then((response) => setCheckinStatus(response.data))
+        .catch(() => undefined)
+    } finally {
+      setCheckinLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-svh bg-background text-foreground">
       <div className="grid min-h-svh lg:grid-cols-[240px_1fr]">
@@ -207,7 +263,13 @@ export function AppLayout() {
         </aside>
         <main className="min-w-0">
           <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-6">
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
+              {checkinStatus?.enabled && (
+                <Button variant="outline" onClick={() => void checkin()} disabled={checkinLoading || checkinStatus.checkedIn}>
+                  <Gift data-icon="inline-start" />
+                  {checkinStatus.checkedIn ? "已签到" : `每日签到 +${checkinStatus.credits}`}
+                </Button>
+              )}
               <Button variant="outline" size="icon" aria-label="公告" onClick={() => setAnnouncementOpen(true)} disabled={!announcement?.isActive || !announcement.body.trim()}>
                 <Bell />
               </Button>

@@ -162,6 +162,22 @@ export type GenerationSettings = {
   imageGenerationConcurrency: number
 }
 
+export type CheckinSettings = {
+  enabled: boolean
+  credits: number
+}
+
+export type CheckinStatus = CheckinSettings & {
+  checkedIn: boolean
+  lastCheckin?: string
+}
+
+export type CheckinResult = {
+  status: CheckinStatus
+  balance: number
+  user: User
+}
+
 export type PaymentOrder = {
   id: string
   userId: string

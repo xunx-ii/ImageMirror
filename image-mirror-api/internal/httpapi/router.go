@@ -15,6 +15,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/apikeys"
 	"github.com/linxunxi/image-mirror/internal/auth"
 	"github.com/linxunxi/image-mirror/internal/billing"
+	"github.com/linxunxi/image-mirror/internal/checkins"
 	"github.com/linxunxi/image-mirror/internal/config"
 	"github.com/linxunxi/image-mirror/internal/content"
 	"github.com/linxunxi/image-mirror/internal/images"
@@ -39,6 +40,7 @@ type Services struct {
 	Redemptions *redemptions.Service
 	Content     *content.Service
 	Usage       *usage.Service
+	Checkins    *checkins.Service
 	Queue       *queue.Client
 	Admin       *admin.Service
 	ConfigStore *systemconfig.Service
@@ -77,6 +79,8 @@ func NewRouter(s Services) *gin.Engine {
 	protected.POST("/billing/epay/orders", createEPayOrderHandler(s.Payments))
 	protected.POST("/billing/redeem", redeemCodeHandler(s.Redemptions))
 	protected.GET("/billing/redemptions", redemptionHistoryHandler(s.Redemptions))
+	protected.GET("/checkin/status", checkinStatusHandler(s.Checkins))
+	protected.POST("/checkin", checkinHandler(s.Checkins, s.Users))
 	protected.GET("/api-keys", listAPIKeysHandler(s.APIKeys))
 	protected.POST("/api-keys", createAPIKeyHandler(s.APIKeys))
 	protected.DELETE("/api-keys/:id", revokeAPIKeyHandler(s.APIKeys))
@@ -111,6 +115,8 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.PUT("/config/platform", updatePlatformConfigHandler(s))
 	adminGroup.GET("/config/generation", generationConfigHandler(s))
 	adminGroup.PUT("/config/generation", updateGenerationConfigHandler(s))
+	adminGroup.GET("/config/checkin", checkinConfigHandler(s))
+	adminGroup.PUT("/config/checkin", updateCheckinConfigHandler(s))
 	adminGroup.GET("/redemption-codes", adminListCodesHandler(s.Redemptions))
 	adminGroup.POST("/redemption-codes", adminGenerateCodesHandler(s.Redemptions))
 	adminGroup.POST("/redemption-codes/bulk", adminBulkCodesHandler(s.Redemptions))
@@ -260,6 +266,37 @@ func transactionsHandler(billingSvc *billing.Service) gin.HandlerFunc {
 			return
 		}
 		OK(c, gin.H{"data": items})
+	}
+}
+
+func checkinStatusHandler(checkinSvc *checkins.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		status, err := checkinSvc.Status(c.Request.Context(), CurrentUserID(c))
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, status)
+	}
+}
+
+func checkinHandler(checkinSvc *checkins.Service, usersRepo *users.Repository) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		result, err := checkinSvc.Checkin(c.Request.Context(), CurrentUserID(c))
+		if errors.Is(err, checkins.ErrAlreadyCheckedIn) {
+			Abort(c, NewError(http.StatusConflict, "already checked in today", err))
+			return
+		}
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		user, err := usersRepo.FindByID(c.Request.Context(), CurrentUserID(c))
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, gin.H{"status": result.Status, "balance": result.Balance, "user": user})
 	}
 }
 
@@ -1043,6 +1080,36 @@ func updateGenerationConfigHandler(s Services) gin.HandlerFunc {
 			return
 		}
 		settings, err := s.ConfigStore.UpdateGenerationSettings(c.Request.Context(), req.ImageGenerationConcurrency, CurrentUserID(c))
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func checkinConfigHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		settings, err := s.ConfigStore.CheckinSettings(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func updateCheckinConfigHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Enabled bool  `json:"enabled"`
+			Credits int64 `json:"credits"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		settings, err := s.ConfigStore.UpdateCheckinSettings(c.Request.Context(), req.Enabled, req.Credits, CurrentUserID(c))
 		if err != nil {
 			Abort(c, err)
 			return

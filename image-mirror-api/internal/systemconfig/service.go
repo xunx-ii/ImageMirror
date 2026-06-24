@@ -25,9 +25,13 @@ const (
 	KeySiteSubtitle  = "site_subtitle"
 
 	KeyImageGenerationConcurrency = "image_generation_concurrency"
+	KeyDailyCheckinEnabled        = "daily_checkin_enabled"
+	KeyDailyCheckinCredits        = "daily_checkin_credits"
 
 	DefaultImageGenerationConcurrency = 10
 	MaxImageGenerationConcurrency     = 100
+	DefaultDailyCheckinCredits        = 5
+	MaxDailyCheckinCredits            = 1_000_000
 )
 
 type OpenAISettings struct {
@@ -57,6 +61,11 @@ type PlatformSettings struct {
 
 type GenerationSettings struct {
 	ImageGenerationConcurrency int `json:"imageGenerationConcurrency"`
+}
+
+type CheckinSettings struct {
+	Enabled bool  `json:"enabled"`
+	Credits int64 `json:"credits"`
 }
 
 type Service struct {
@@ -139,6 +148,42 @@ func (s *Service) UpdateGenerationSettings(ctx context.Context, imageGenerationC
 	}
 	if err := s.upsert(ctx, KeyImageGenerationConcurrency, strconv.Itoa(settings.ImageGenerationConcurrency), updatedBy); err != nil {
 		return GenerationSettings{}, err
+	}
+	return settings, nil
+}
+
+func (s *Service) CheckinSettings(ctx context.Context) (CheckinSettings, error) {
+	enabled, err := s.value(ctx, KeyDailyCheckinEnabled)
+	if err != nil {
+		return CheckinSettings{}, err
+	}
+	credits, err := s.value(ctx, KeyDailyCheckinCredits)
+	if err != nil {
+		return CheckinSettings{}, err
+	}
+	settings := CheckinSettings{
+		Enabled: enabled == "true",
+		Credits: DefaultDailyCheckinCredits,
+	}
+	if parsed, ok := parsePositiveInt(credits); ok {
+		settings.Credits = normalizeDailyCheckinCredits(parsed)
+	}
+	return settings, nil
+}
+
+func (s *Service) UpdateCheckinSettings(ctx context.Context, enabled bool, credits int64, updatedBy string) (CheckinSettings, error) {
+	settings := CheckinSettings{
+		Enabled: enabled,
+		Credits: normalizeDailyCheckinCredits(credits),
+	}
+	values := map[string]string{
+		KeyDailyCheckinEnabled: strconv.FormatBool(settings.Enabled),
+		KeyDailyCheckinCredits: strconv.FormatInt(settings.Credits, 10),
+	}
+	for key, value := range values {
+		if err := s.upsert(ctx, key, value, updatedBy); err != nil {
+			return CheckinSettings{}, err
+		}
 	}
 	return settings, nil
 }
@@ -346,6 +391,16 @@ func normalizeImageGenerationConcurrency(value int) int {
 	}
 	if value > MaxImageGenerationConcurrency {
 		return MaxImageGenerationConcurrency
+	}
+	return value
+}
+
+func normalizeDailyCheckinCredits(value int64) int64 {
+	if value <= 0 {
+		return DefaultDailyCheckinCredits
+	}
+	if value > MaxDailyCheckinCredits {
+		return MaxDailyCheckinCredits
 	}
 	return value
 }

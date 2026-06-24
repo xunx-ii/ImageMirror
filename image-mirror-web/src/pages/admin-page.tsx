@@ -29,20 +29,22 @@ import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { emitCheckinSettingsUpdated } from "@/lib/checkin"
 import { emitSiteContentUpdated } from "@/lib/content"
 import { formatDate } from "@/lib/format"
 import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
 import { defaultPlatformSettings, emitPlatformSettingsUpdated, mergePlatformSettings } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { AdminOverview, ContentAsset, EPaySettings, GenerationSettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
+import type { AdminOverview, CheckinSettings, ContentAsset, EPaySettings, GenerationSettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
 type UsageDetailKind = "prompt" | "result"
@@ -91,6 +93,7 @@ export function AdminPage() {
   const [epay, setEPay] = useState<EPaySettings | null>(null)
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
   const [generationSettings, setGenerationSettings] = useState<GenerationSettings>({ imageGenerationConcurrency: 10 })
+  const [checkinSettings, setCheckinSettings] = useState<CheckinSettings>({ enabled: false, credits: 5 })
   const [docs, setDocs] = useState<SiteContent | null>(null)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
   const [terms, setTerms] = useState<SiteContent | null>(null)
@@ -123,6 +126,8 @@ export function AdminPage() {
   const [siteTitle, setSiteTitle] = useState(defaultPlatformSettings.siteTitle)
   const [siteSubtitle, setSiteSubtitle] = useState(defaultPlatformSettings.siteSubtitle)
   const [imageGenerationConcurrency, setImageGenerationConcurrency] = useState(10)
+  const [checkinEnabled, setCheckinEnabled] = useState(false)
+  const [checkinCredits, setCheckinCredits] = useState(5)
 
   const [openAIEndpointName, setOpenAIEndpointName] = useState("默认节点")
   const [openAIBaseUrl, setOpenAIBaseUrl] = useState("https://api.openai.com")
@@ -188,6 +193,7 @@ export function AdminPage() {
         epayResponse,
         platformResponse,
         generationResponse,
+        checkinResponse,
         docsResponse,
         announcementResponse,
         termsResponse,
@@ -201,6 +207,7 @@ export function AdminPage() {
         api.get<EPaySettings>("/api/admin/config/epay"),
         api.get<PlatformSettings>("/api/admin/config/platform"),
         api.get<GenerationSettings>("/api/admin/config/generation"),
+        api.get<CheckinSettings>("/api/admin/config/checkin"),
         api.get<SiteContent>("/api/admin/content/docs"),
         api.get<SiteContent>("/api/admin/content/announcement"),
         api.get<SiteContent>("/api/admin/content/terms"),
@@ -230,6 +237,9 @@ export function AdminPage() {
       setSize((value) => (!nextPlatform.allow4k && value === "4k" ? "2k" : value))
       setGenerationSettings(generationResponse.data)
       setImageGenerationConcurrency(generationResponse.data.imageGenerationConcurrency || 10)
+      setCheckinSettings(checkinResponse.data)
+      setCheckinEnabled(checkinResponse.data.enabled)
+      setCheckinCredits(checkinResponse.data.credits || 5)
 
       setDocs(docsResponse.data)
       setDocsTitle(docsResponse.data.title || "文档")
@@ -488,6 +498,24 @@ export function AdminPage() {
       setGenerationSettings(data)
       setImageGenerationConcurrency(data.imageGenerationConcurrency)
       toast.success(`生成并发已设置为 ${data.imageGenerationConcurrency}`)
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  async function saveCheckinSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const credits = Math.max(1, Math.min(1_000_000, Math.floor(Number(checkinCredits) || 5)))
+    try {
+      const { data } = await api.put<CheckinSettings>("/api/admin/config/checkin", {
+        enabled: checkinEnabled,
+        credits,
+      })
+      setCheckinSettings(data)
+      setCheckinEnabled(data.enabled)
+      setCheckinCredits(data.credits)
+      emitCheckinSettingsUpdated(data)
+      toast.success(data.enabled ? `每日签到已启用，每次赠送 ${data.credits} credits` : "每日签到已关闭")
     } catch (error) {
       toast.error(errorMessage(error))
     }
@@ -814,6 +842,7 @@ export function AdminPage() {
               <Badge variant="secondary">规则 {pricing.length}</Badge>
               <Badge variant="secondary">最大 {platform.maxResolutionBucket.toUpperCase()}</Badge>
               <Badge variant="secondary">并发 {generationSettings.imageGenerationConcurrency}</Badge>
+              <Badge variant="secondary">签到 {checkinSettings.enabled ? `${checkinSettings.credits} credits` : "未启用"}</Badge>
               <Badge variant="secondary">兑换码 {codes.length}</Badge>
               <Badge variant="secondary">用户 {users.length}</Badge>
             </CardContent>
@@ -860,6 +889,41 @@ export function AdminPage() {
                       onChange={(event) => setImageGenerationConcurrency(Number(event.target.value))}
                     />
                     <FieldDescription>默认 10，允许范围 1-100。</FieldDescription>
+                  </Field>
+                </FieldGroup>
+                <Button type="submit" className="w-full md:w-auto">
+                  <Save data-icon="inline-start" />
+                  保存
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>每日签到</CardTitle>
+              <CardDescription>开启后用户可每天点击右上角按钮领取一次奖励。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-4 md:flex-row md:items-end" onSubmit={saveCheckinSettings}>
+                <FieldGroup className="md:max-w-md">
+                  <Field orientation="horizontal">
+                    <Checkbox id="daily-checkin-enabled" checked={checkinEnabled} onCheckedChange={(checked) => setCheckinEnabled(checked)} />
+                    <FieldContent>
+                      <FieldLabel htmlFor="daily-checkin-enabled">启用每日签到</FieldLabel>
+                      <FieldDescription>关闭后前台不会显示签到按钮。</FieldDescription>
+                    </FieldContent>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="daily-checkin-credits">每日赠送 credits</FieldLabel>
+                    <Input
+                      id="daily-checkin-credits"
+                      type="number"
+                      min={1}
+                      max={1000000}
+                      value={checkinCredits}
+                      onChange={(event) => setCheckinCredits(Number(event.target.value))}
+                    />
+                    <FieldDescription>允许范围 1-1000000。</FieldDescription>
                   </Field>
                 </FieldGroup>
                 <Button type="submit" className="w-full md:w-auto">
