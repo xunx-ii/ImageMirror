@@ -62,6 +62,23 @@ function qualityLabel(value: string) {
   }
 }
 
+function usageStatusMeta(log: UsageLog) {
+  switch (log.status) {
+    case "PENDING":
+      return { label: "排队中", variant: "outline" as const }
+    case "PROCESSING":
+      return { label: "处理中", variant: "outline" as const }
+    case "COMPLETED":
+      return { label: "成功", variant: "secondary" as const }
+    case "FAILED":
+      return { label: "失败", variant: "destructive" as const }
+    case "EXPIRED":
+      return { label: "已过期", variant: "outline" as const }
+    default:
+      return log.success ? { label: "成功", variant: "secondary" as const } : { label: "失败", variant: "destructive" as const }
+  }
+}
+
 export function AdminPage() {
   const currentUser = useAuthStore((state) => state.user)
   const [overview, setOverview] = useState<AdminOverview | null>(null)
@@ -922,51 +939,54 @@ export function AdminPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {usageLogs.map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell>{formatDate(log.createdAt)}</TableCell>
-                      <TableCell>
-                        <div className="flex min-w-[180px] flex-col gap-1">
-                          <span className="truncate font-medium">{log.userEmail || "-"}</span>
-                          {log.apiKeyName && <span className="truncate text-xs text-muted-foreground">Key {log.apiKeyName}</span>}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-[150px] flex-col gap-1">
-                          <span className="font-mono text-xs">{log.ipAddress || "-"}</span>
-                          <Badge variant="outline">{log.source}</Badge>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-[170px] flex-col gap-1 text-xs">
-                          <span>{log.method} {log.path}</span>
-                          <span className="text-muted-foreground">
-                            {log.model} / {log.size} / {qualityLabel(log.quality)}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="tabular-nums">{formatDuration(log.durationMs)}</TableCell>
-                      <TableCell className="tabular-nums">{log.creditsCost}</TableCell>
-                      <TableCell>
-                        {log.prompt ? (
-                          <Button type="button" variant="ghost" size="icon-xs" aria-label="查看提示词" title="查看提示词" onClick={() => openUsageDetail(log, "prompt")}>
-                            <Eye data-icon="inline-start" />
-                          </Button>
-                        ) : (
-                          "-"
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-[140px] items-center gap-2">
-                          <Badge variant={log.success ? "secondary" : "destructive"}>{log.success ? "成功" : "失败"}</Badge>
-                          <span className="text-xs text-muted-foreground">{log.statusCode ?? "-"} / {log.status}</span>
-                          <Button type="button" variant="ghost" size="icon-xs" aria-label="查看结果详情" title="查看结果详情" onClick={() => openUsageDetail(log, "result")}>
-                            <Eye data-icon="inline-start" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {usageLogs.map((log) => {
+                    const statusMeta = usageStatusMeta(log)
+                    return (
+                      <TableRow key={log.id}>
+                        <TableCell>{formatDate(log.createdAt)}</TableCell>
+                        <TableCell>
+                          <div className="flex min-w-[180px] flex-col gap-1">
+                            <span className="truncate font-medium">{log.userEmail || "-"}</span>
+                            {log.apiKeyName && <span className="truncate text-xs text-muted-foreground">Key {log.apiKeyName}</span>}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex min-w-[150px] flex-col gap-1">
+                            <span className="font-mono text-xs">{log.ipAddress || "-"}</span>
+                            <Badge variant="outline">{log.source}</Badge>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex min-w-[170px] flex-col gap-1 text-xs">
+                            <span>{log.method} {log.path}</span>
+                            <span className="text-muted-foreground">
+                              {log.model} / {log.size} / {qualityLabel(log.quality)}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="tabular-nums">{formatDuration(log.durationMs)}</TableCell>
+                        <TableCell className="tabular-nums">{log.creditsCost}</TableCell>
+                        <TableCell>
+                          {log.prompt ? (
+                            <Button type="button" variant="ghost" size="icon-xs" aria-label="查看提示词" title="查看提示词" onClick={() => openUsageDetail(log, "prompt")}>
+                              <Eye data-icon="inline-start" />
+                            </Button>
+                          ) : (
+                            "-"
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex min-w-[140px] items-center gap-2">
+                            <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
+                            <span className="text-xs text-muted-foreground">{log.statusCode ?? "-"} / {log.status}</span>
+                            <Button type="button" variant="ghost" size="icon-xs" aria-label="查看结果详情" title="查看结果详情" onClick={() => openUsageDetail(log, "result")}>
+                              <Eye data-icon="inline-start" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                   {!usageLoading && usageLogs.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
@@ -1446,7 +1466,7 @@ export function AdminPage() {
           {usageDetailLog && usageDetailKind === "result" && (
             <div className="flex flex-col gap-4">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={usageDetailLog.success ? "secondary" : "destructive"}>{usageDetailLog.success ? "成功" : "失败"}</Badge>
+                <Badge variant={usageStatusMeta(usageDetailLog).variant}>{usageStatusMeta(usageDetailLog).label}</Badge>
                 <Badge variant="outline">{usageDetailLog.statusCode ?? "-"} / {usageDetailLog.status}</Badge>
                 <Badge variant="outline">{formatDuration(usageDetailLog.durationMs)}</Badge>
                 <Badge variant="outline">{usageDetailLog.creditsCost} 积分</Badge>
