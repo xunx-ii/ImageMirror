@@ -7,8 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	imagedraw "image/draw"
+	"image/jpeg"
+	_ "image/png"
 	"io"
+	"math"
 	"mime/multipart"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -83,7 +90,10 @@ func (s *Service) SetUsageService(usageSvc *usage.Service) {
 const (
 	maxReferenceImages     = 4
 	maxReferenceImageBytes = 20 << 20
+	DefaultPreviewMaxEdge  = 1024
 )
+
+var previewMaxEdges = []int{512, 1024, 1536}
 
 func (s *Service) CreatePending(ctx context.Context, req CreateRequest) (Generation, error) {
 	req = normalize(req, s.cfg.DefaultImageModel)
@@ -400,6 +410,38 @@ func (s *Service) ReadFile(ctx context.Context, userID string, imageID string) (
 	return bytes, gen, err
 }
 
+func (s *Service) ReadPreview(ctx context.Context, userID string, imageID string, maxEdge int) ([]byte, Generation, error) {
+	maxEdge = normalizePreviewMaxEdge(maxEdge)
+	gen, err := s.FindForUser(ctx, userID, imageID)
+	if err != nil {
+		return nil, Generation{}, err
+	}
+	if gen.Status != "COMPLETED" || gen.StorageKey == nil || gen.DeletedAt != nil {
+		return nil, Generation{}, errors.New("image preview is not available")
+	}
+	if data, _, err := s.storage.ReadImagePreview(ctx, *gen.StorageKey, maxEdge); err == nil {
+		return data, gen, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, Generation{}, err
+	}
+
+	original, err := s.storage.ReadImage(ctx, *gen.StorageKey)
+	if err != nil {
+		return nil, Generation{}, err
+	}
+	preview, err := createPreview(original, maxEdge)
+	if err != nil {
+		return nil, Generation{}, err
+	}
+	if _, err := s.storage.SaveImagePreview(ctx, *gen.StorageKey, maxEdge, preview); err != nil {
+		if cached, _, readErr := s.storage.ReadImagePreview(ctx, *gen.StorageKey, maxEdge); readErr == nil {
+			return cached, gen, nil
+		}
+		return nil, Generation{}, err
+	}
+	return preview, gen, nil
+}
+
 func (s *Service) DeleteForUser(ctx context.Context, userID string, imageID string) error {
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -441,7 +483,7 @@ func (s *Service) DeleteForUser(ctx context.Context, userID string, imageID stri
 		return err
 	}
 	if gen.StorageKey != nil {
-		_ = s.storage.DeleteImage(ctx, *gen.StorageKey)
+		s.deleteImageFiles(ctx, *gen.StorageKey)
 	}
 	s.deleteReferenceImages(ctx, gen.ReferenceKeys)
 	return nil
@@ -543,7 +585,7 @@ func (s *Service) FileRefsForUser(ctx context.Context, userID string) ([]FileRef
 func (s *Service) DeleteFileRefs(ctx context.Context, refs []FileRef) error {
 	for _, item := range refs {
 		if item.StorageKey != nil {
-			_ = s.storage.DeleteImage(ctx, *item.StorageKey)
+			s.deleteImageFiles(ctx, *item.StorageKey)
 		}
 		s.deleteReferenceImages(ctx, item.ReferenceKeys)
 	}
@@ -599,7 +641,7 @@ func (s *Service) ExpireOld(ctx context.Context, limit int32) (int, error) {
 			continue
 		}
 		if it.key != nil {
-			_ = s.storage.DeleteImage(ctx, *it.key)
+			s.deleteImageFiles(ctx, *it.key)
 		}
 		s.deleteReferenceImages(ctx, it.refs)
 		expired++
@@ -674,6 +716,121 @@ func scanGeneration(row pgx.Row, gen *Generation) error {
 	}
 	gen.ReferenceCount = len(gen.ReferenceKeys)
 	return nil
+}
+
+func normalizePreviewMaxEdge(maxEdge int) int {
+	if maxEdge <= 0 {
+		return DefaultPreviewMaxEdge
+	}
+	for _, allowed := range previewMaxEdges {
+		if maxEdge <= allowed {
+			return allowed
+		}
+	}
+	return previewMaxEdges[len(previewMaxEdges)-1]
+}
+
+func createPreview(data []byte, maxEdge int) ([]byte, error) {
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	bounds := src.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, errors.New("image has invalid dimensions")
+	}
+	scale := math.Min(1, float64(maxEdge)/float64(max(width, height)))
+	nextWidth := max(1, int(math.Round(float64(width)*scale)))
+	nextHeight := max(1, int(math.Round(float64(height)*scale)))
+	dst := resizeToOpaqueRGBA(src, nextWidth, nextHeight)
+
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 82}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func resizeToOpaqueRGBA(src image.Image, width int, height int) *image.RGBA {
+	bounds := src.Bounds()
+	dst := image.NewRGBA(image.Rect(0, 0, width, height))
+	srcWidth := bounds.Dx()
+	srcHeight := bounds.Dy()
+	if width == srcWidth && height == srcHeight {
+		imagedraw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, imagedraw.Src)
+		imagedraw.Draw(dst, dst.Bounds(), src, bounds.Min, imagedraw.Over)
+		return dst
+	}
+
+	xRatio := float64(srcWidth) / float64(width)
+	yRatio := float64(srcHeight) / float64(height)
+	for y := 0; y < height; y++ {
+		srcY := (float64(y)+0.5)*yRatio - 0.5
+		y0 := int(math.Floor(srcY))
+		if y0 < 0 {
+			y0 = 0
+		}
+		y1 := min(y0+1, srcHeight-1)
+		wy := srcY - float64(y0)
+		if wy < 0 {
+			wy = 0
+		}
+		for x := 0; x < width; x++ {
+			srcX := (float64(x)+0.5)*xRatio - 0.5
+			x0 := int(math.Floor(srcX))
+			if x0 < 0 {
+				x0 = 0
+			}
+			x1 := min(x0+1, srcWidth-1)
+			wx := srcX - float64(x0)
+			if wx < 0 {
+				wx = 0
+			}
+			dst.SetRGBA(x, y, bilinearOpaque(src, bounds.Min.X+x0, bounds.Min.Y+y0, bounds.Min.X+x1, bounds.Min.Y+y1, wx, wy))
+		}
+	}
+	return dst
+}
+
+func bilinearOpaque(src image.Image, x0 int, y0 int, x1 int, y1 int, wx float64, wy float64) color.RGBA {
+	c00 := compositeOnWhite(src.At(x0, y0))
+	c10 := compositeOnWhite(src.At(x1, y0))
+	c01 := compositeOnWhite(src.At(x0, y1))
+	c11 := compositeOnWhite(src.At(x1, y1))
+	return color.RGBA{
+		R: lerpByte(lerpByteFloat(c00.R, c10.R, wx), lerpByteFloat(c01.R, c11.R, wx), wy),
+		G: lerpByte(lerpByteFloat(c00.G, c10.G, wx), lerpByteFloat(c01.G, c11.G, wx), wy),
+		B: lerpByte(lerpByteFloat(c00.B, c10.B, wx), lerpByteFloat(c01.B, c11.B, wx), wy),
+		A: 255,
+	}
+}
+
+func compositeOnWhite(c color.Color) color.RGBA {
+	r, g, b, a := c.RGBA()
+	alpha := float64(a) / 65535
+	return color.RGBA{
+		R: uint8(math.Round(float64(r)/257 + 255*(1-alpha))),
+		G: uint8(math.Round(float64(g)/257 + 255*(1-alpha))),
+		B: uint8(math.Round(float64(b)/257 + 255*(1-alpha))),
+		A: 255,
+	}
+}
+
+func lerpByteFloat(a uint8, b uint8, t float64) float64 {
+	return float64(a)*(1-t) + float64(b)*t
+}
+
+func lerpByte(a float64, b float64, t float64) uint8 {
+	return uint8(math.Round(a*(1-t) + b*t))
+}
+
+func (s *Service) deleteImageFiles(ctx context.Context, key string) {
+	_ = s.storage.DeleteImage(ctx, key)
+	for _, maxEdge := range previewMaxEdges {
+		_ = s.storage.DeleteImagePreview(ctx, key, maxEdge)
+	}
 }
 
 func (s *Service) deleteReferenceImages(ctx context.Context, keys []string) {

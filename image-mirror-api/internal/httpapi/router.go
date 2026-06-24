@@ -89,6 +89,7 @@ func NewRouter(s Services) *gin.Engine {
 	protected.GET("/images", listImagesHandler(s.Images))
 	protected.GET("/images/:id", getImageHandler(s.Images))
 	protected.GET("/images/:id/status", getImageHandler(s.Images))
+	protected.GET("/images/:id/preview", imagePreviewHandler(s.Images))
 	protected.GET("/images/:id/file", imageFileHandler(s.Images))
 	protected.DELETE("/images/:id", deleteImageHandler(s.Images))
 	protected.POST("/images/bulk-delete", bulkDeleteImagesHandler(s.Images))
@@ -142,6 +143,7 @@ func NewRouter(s Services) *gin.Engine {
 	v1.GET("/billing/usage", transactionsHandler(s.Billing))
 	v1.POST("/images/generations", developerGenerateHandler(s))
 	v1.GET("/images/:id", getImageHandler(s.Images))
+	v1.GET("/images/:id/preview", imagePreviewHandler(s.Images))
 	v1.GET("/images/:id/file", imageFileHandler(s.Images))
 
 	return r
@@ -772,6 +774,19 @@ func imageFileHandler(svc *images.Service) gin.HandlerFunc {
 		}
 		c.Header("Cache-Control", "private, max-age=300")
 		c.Data(http.StatusOK, contentType, bytes)
+	}
+}
+
+func imagePreviewHandler(svc *images.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		maxEdge, _ := strconv.Atoi(c.DefaultQuery("maxEdge", strconv.Itoa(images.DefaultPreviewMaxEdge)))
+		bytes, _, err := svc.ReadPreview(c.Request.Context(), CurrentUserID(c), c.Param("id"), maxEdge)
+		if err != nil {
+			Abort(c, NewError(http.StatusNotFound, "image preview is not available", err))
+			return
+		}
+		c.Header("Cache-Control", "private, max-age=86400")
+		c.Data(http.StatusOK, "image/jpeg", bytes)
 	}
 }
 

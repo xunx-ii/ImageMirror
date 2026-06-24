@@ -30,6 +30,14 @@ func (s *Local) SaveImage(ctx context.Context, userID string, imageID string, da
 	return s.write(ctx, key, data)
 }
 
+func (s *Local) SaveImagePreview(ctx context.Context, imageKey string, maxEdge int, data []byte) (string, error) {
+	key, err := imagePreviewKey(imageKey, maxEdge)
+	if err != nil {
+		return "", err
+	}
+	return s.write(ctx, key, data)
+}
+
 func (s *Local) SaveReference(ctx context.Context, userID string, imageID string, index int, filename string, data []byte) (string, error) {
 	now := time.Now()
 	ext := strings.ToLower(filepath.Ext(filename))
@@ -75,8 +83,23 @@ func (s *Local) write(ctx context.Context, key string, data []byte) (string, err
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmp := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := tmpFile.Chmod(0o644); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return "", err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -98,6 +121,19 @@ func (s *Local) ReadImage(_ context.Context, key string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+func (s *Local) ReadImagePreview(_ context.Context, imageKey string, maxEdge int) ([]byte, string, error) {
+	key, err := imagePreviewKey(imageKey, maxEdge)
+	if err != nil {
+		return nil, "", err
+	}
+	path, err := s.resolve(key)
+	if err != nil {
+		return nil, "", err
+	}
+	data, err := os.ReadFile(path)
+	return data, key, err
+}
+
 func (s *Local) ReadFile(_ context.Context, key string) ([]byte, error) {
 	path, err := s.resolve(key)
 	if err != nil {
@@ -107,6 +143,18 @@ func (s *Local) ReadFile(_ context.Context, key string) ([]byte, error) {
 }
 
 func (s *Local) DeleteImage(_ context.Context, key string) error {
+	return s.delete(key)
+}
+
+func (s *Local) DeleteImagePreview(_ context.Context, imageKey string, maxEdge int) error {
+	key, err := imagePreviewKey(imageKey, maxEdge)
+	if err != nil {
+		return err
+	}
+	return s.delete(key)
+}
+
+func (s *Local) delete(key string) error {
 	path, err := s.resolve(key)
 	if err != nil {
 		return err
@@ -115,6 +163,19 @@ func (s *Local) DeleteImage(_ context.Context, key string) error {
 		return err
 	}
 	return nil
+}
+
+func imagePreviewKey(imageKey string, maxEdge int) (string, error) {
+	if maxEdge <= 0 || maxEdge > 4096 {
+		return "", errors.New("invalid preview size")
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(imageKey))
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		return "", errors.New("invalid storage key")
+	}
+	ext := filepath.Ext(cleaned)
+	base := strings.TrimSuffix(cleaned, ext)
+	return filepath.ToSlash(fmt.Sprintf("%s.preview-%d.jpg", base, maxEdge)), nil
 }
 
 func (s *Local) resolve(key string) (string, error) {

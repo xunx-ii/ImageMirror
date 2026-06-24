@@ -83,7 +83,7 @@ export function DashboardPage() {
               {completed.map((image) => (
                 <div key={image.id} className="flex flex-col gap-2 rounded-lg border p-2">
                   <button type="button" className="text-left" onClick={() => setViewer(image)}>
-                    <SecureImage imageId={image.id} alt={image.prompt} className="aspect-square rounded-md object-cover" />
+                    <SecureImage imageId={image.id} alt={image.prompt} maxEdge={512} className="aspect-square rounded-md object-cover" />
                   </button>
                   <div className="flex items-center justify-between gap-2">
                     <div className="truncate text-sm">{image.prompt}</div>

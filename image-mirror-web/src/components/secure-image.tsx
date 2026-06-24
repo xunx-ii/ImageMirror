@@ -7,16 +7,18 @@ import { Skeleton } from "@/components/ui/skeleton"
 type SecureImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "alt" | "src"> & {
   imageId: string
   alt: string
+  maxEdge?: 512 | 1024 | 1536
 }
 
-export function SecureImage({ imageId, alt, className, style, loading = "lazy", decoding = "async", ...props }: SecureImageProps) {
+export function SecureImage({ imageId, alt, maxEdge = 1024, className, style, loading = "lazy", decoding = "async", ...props }: SecureImageProps) {
   const placeholderRef = useRef<HTMLDivElement | null>(null)
   const [visibleState, setVisibleState] = useState({ imageId: "", visible: false })
   const [state, setState] = useState<{
     imageId: string
+    maxEdge: number
     url: string | null
     failed: boolean
-  }>({ imageId, url: null, failed: false })
+  }>({ imageId, maxEdge, url: null, failed: false })
   const shouldLoad = loading === "eager" || (visibleState.imageId === imageId && visibleState.visible)
 
   useEffect(() => {
@@ -47,14 +49,18 @@ export function SecureImage({ imageId, alt, className, style, loading = "lazy", 
     let cancelled = false
 
     api
-      .get<Blob>(`/api/images/${imageId}/file`, { responseType: "blob", signal: controller.signal })
+      .get<Blob>(`/api/images/${imageId}/preview`, {
+        params: { maxEdge },
+        responseType: "blob",
+        signal: controller.signal,
+      })
       .then((response) => {
         if (cancelled) return
         revoked = URL.createObjectURL(response.data)
-        setState({ imageId, url: revoked, failed: false })
+        setState({ imageId, maxEdge, url: revoked, failed: false })
       })
       .catch(() => {
-        if (!cancelled) setState({ imageId, url: null, failed: true })
+        if (!cancelled) setState({ imageId, maxEdge, url: null, failed: true })
       })
 
     return () => {
@@ -62,9 +68,9 @@ export function SecureImage({ imageId, alt, className, style, loading = "lazy", 
       controller.abort()
       if (revoked) URL.revokeObjectURL(revoked)
     }
-  }, [imageId, shouldLoad])
+  }, [imageId, maxEdge, shouldLoad])
 
-  if (!shouldLoad || state.imageId !== imageId) {
+  if (!shouldLoad || state.imageId !== imageId || state.maxEdge !== maxEdge) {
     return <Skeleton ref={placeholderRef} className="aspect-square w-full rounded-lg" />
   }
 

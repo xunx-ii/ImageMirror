@@ -134,7 +134,10 @@ func shouldSkipRateLimit(c *gin.Context) bool {
 		return false
 	}
 	path := c.Request.URL.Path
-	return (strings.HasPrefix(path, "/api/images/") || strings.HasPrefix(path, "/v1/images/")) && strings.HasSuffix(path, "/file")
+	if !(strings.HasPrefix(path, "/api/images/") || strings.HasPrefix(path, "/v1/images/")) {
+		return false
+	}
+	return strings.HasSuffix(path, "/file") || strings.HasSuffix(path, "/preview")
 }
 
 func CurrentUserID(c *gin.Context) string {
