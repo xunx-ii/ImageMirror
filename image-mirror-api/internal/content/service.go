@@ -158,7 +158,7 @@ func scanAsset(row pgx.Row) (Asset, error) {
 func normalizeKey(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	switch value {
-	case "docs", "announcement":
+	case "docs", "announcement", "terms", "privacy":
 		return value
 	default:
 		return ""

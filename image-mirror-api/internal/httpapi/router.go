@@ -60,6 +60,8 @@ func NewRouter(s Services) *gin.Engine {
 	r.GET("/api/settings/epay", epaySettingsHandler(s))
 	r.GET("/api/content/docs", publicContentHandler(s.Content, "docs"))
 	r.GET("/api/content/announcement", publicContentHandler(s.Content, "announcement"))
+	r.GET("/api/content/terms", publicContentHandler(s.Content, "terms"))
+	r.GET("/api/content/privacy", publicContentHandler(s.Content, "privacy"))
 	r.GET("/api/content/assets/:id", contentAssetHandler(s.Content))
 
 	api := r.Group("/api")

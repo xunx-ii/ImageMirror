@@ -199,7 +199,7 @@ export type RedemptionHistoryItem = {
 }
 
 export type SiteContent = {
-  key: "docs" | "announcement"
+  key: "docs" | "announcement" | "terms" | "privacy"
   title: string
   body: string
   isActive: boolean

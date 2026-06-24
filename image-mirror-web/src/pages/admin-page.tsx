@@ -46,6 +46,7 @@ import type { AdminOverview, ContentAsset, EPaySettings, GenerationSettings, Ope
 
 const qualities = ["low", "medium", "high", "auto"]
 type UsageDetailKind = "prompt" | "result"
+type EditableContentKey = "docs" | "announcement" | "terms" | "privacy"
 
 function qualityLabel(value: string) {
   switch (value) {
@@ -92,6 +93,8 @@ export function AdminPage() {
   const [generationSettings, setGenerationSettings] = useState<GenerationSettings>({ imageGenerationConcurrency: 10 })
   const [docs, setDocs] = useState<SiteContent | null>(null)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
+  const [terms, setTerms] = useState<SiteContent | null>(null)
+  const [privacy, setPrivacy] = useState<SiteContent | null>(null)
 
   const [model, setModel] = useState("gpt-image-2")
   const [size, setSize] = useState("1k")
@@ -111,6 +114,12 @@ export function AdminPage() {
   const [announcementTitle, setAnnouncementTitle] = useState("公告")
   const [announcementBody, setAnnouncementBody] = useState("")
   const [announcementActive, setAnnouncementActive] = useState(false)
+  const [termsTitle, setTermsTitle] = useState("服务条款")
+  const [termsBody, setTermsBody] = useState("")
+  const [termsActive, setTermsActive] = useState(true)
+  const [privacyTitle, setPrivacyTitle] = useState("隐私政策")
+  const [privacyBody, setPrivacyBody] = useState("")
+  const [privacyActive, setPrivacyActive] = useState(true)
   const [siteTitle, setSiteTitle] = useState(defaultPlatformSettings.siteTitle)
   const [siteSubtitle, setSiteSubtitle] = useState(defaultPlatformSettings.siteSubtitle)
   const [imageGenerationConcurrency, setImageGenerationConcurrency] = useState(10)
@@ -170,7 +179,20 @@ export function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [statsResponse, usersResponse, pricingResponse, codesResponse, openAIResponse, epayResponse, platformResponse, generationResponse, docsResponse, announcementResponse] = await Promise.all([
+      const [
+        statsResponse,
+        usersResponse,
+        pricingResponse,
+        codesResponse,
+        openAIResponse,
+        epayResponse,
+        platformResponse,
+        generationResponse,
+        docsResponse,
+        announcementResponse,
+        termsResponse,
+        privacyResponse,
+      ] = await Promise.all([
         api.get<AdminOverview>("/api/admin/stats/overview"),
         api.get<{ data: User[] }>("/api/admin/users?limit=100"),
         api.get<{ data: PricingRule[] }>("/api/admin/pricing"),
@@ -181,6 +203,8 @@ export function AdminPage() {
         api.get<GenerationSettings>("/api/admin/config/generation"),
         api.get<SiteContent>("/api/admin/content/docs"),
         api.get<SiteContent>("/api/admin/content/announcement"),
+        api.get<SiteContent>("/api/admin/content/terms"),
+        api.get<SiteContent>("/api/admin/content/privacy"),
       ])
       setOverview(statsResponse.data)
       setUsers(usersResponse.data.data ?? [])
@@ -216,6 +240,16 @@ export function AdminPage() {
       setAnnouncementTitle(announcementResponse.data.title || "公告")
       setAnnouncementBody(announcementResponse.data.body || "")
       setAnnouncementActive(announcementResponse.data.isActive)
+
+      setTerms(termsResponse.data)
+      setTermsTitle(termsResponse.data.title || "服务条款")
+      setTermsBody(termsResponse.data.body || "")
+      setTermsActive(termsResponse.data.isActive)
+
+      setPrivacy(privacyResponse.data)
+      setPrivacyTitle(privacyResponse.data.title || "隐私政策")
+      setPrivacyBody(privacyResponse.data.body || "")
+      setPrivacyActive(privacyResponse.data.isActive)
     } catch (error) {
       toast.error(errorMessage(error))
     }
@@ -357,14 +391,16 @@ export function AdminPage() {
     }
   }
 
-  async function saveContent(key: "docs" | "announcement", event: FormEvent<HTMLFormElement>) {
+  async function saveContent(key: EditableContentKey, event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const isDocs = key === "docs"
+    const isAnnouncement = key === "announcement"
+    const isTerms = key === "terms"
     try {
       const payload = {
-        title: isDocs ? docsTitle : announcementTitle,
-        body: isDocs ? docsBody : announcementBody,
-        isActive: isDocs ? docsActive : announcementActive,
+        title: isDocs ? docsTitle : isAnnouncement ? announcementTitle : isTerms ? termsTitle : privacyTitle,
+        body: isDocs ? docsBody : isAnnouncement ? announcementBody : isTerms ? termsBody : privacyBody,
+        isActive: isDocs ? docsActive : isAnnouncement ? announcementActive : isTerms ? termsActive : privacyActive,
       }
       const { data } = await api.put<SiteContent>(`/api/admin/content/${key}`, payload)
       if (isDocs) {
@@ -372,28 +408,45 @@ export function AdminPage() {
         setDocsTitle(data.title)
         setDocsBody(data.body)
         setDocsActive(data.isActive)
-      } else {
+      } else if (isAnnouncement) {
         setAnnouncement(data)
         setAnnouncementTitle(data.title)
         setAnnouncementBody(data.body)
         setAnnouncementActive(data.isActive)
+      } else if (isTerms) {
+        setTerms(data)
+        setTermsTitle(data.title)
+        setTermsBody(data.body)
+        setTermsActive(data.isActive)
+      } else {
+        setPrivacy(data)
+        setPrivacyTitle(data.title)
+        setPrivacyBody(data.body)
+        setPrivacyActive(data.isActive)
       }
       emitSiteContentUpdated(data)
-      toast.success(isDocs ? "文档已保存" : "公告已保存")
+      toast.success(isDocs ? "文档已保存" : isAnnouncement ? "公告已保存" : isTerms ? "服务条款已保存" : "隐私政策已保存")
     } catch (error) {
       toast.error(errorMessage(error))
     }
   }
 
-  async function uploadDocsImage(event: ChangeEvent<HTMLInputElement>) {
+  async function uploadContentImage(key: EditableContentKey, event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ""
     if (!file) return
     try {
       const form = new FormData()
       form.append("file", file)
-      const { data } = await api.post<{ asset: ContentAsset; markdown: string }>("/api/admin/content/docs/assets", form)
-      setDocsBody((value) => (value.trim() ? `${value}\n\n${data.markdown}` : data.markdown))
+      const { data } = await api.post<{ asset: ContentAsset; markdown: string }>(`/api/admin/content/${key}/assets`, form)
+      const appendMarkdown = (value: string) => (value.trim() ? `${value}\n\n${data.markdown}` : data.markdown)
+      if (key === "docs") {
+        setDocsBody(appendMarkdown)
+      } else if (key === "terms") {
+        setTermsBody(appendMarkdown)
+      } else if (key === "privacy") {
+        setPrivacyBody(appendMarkdown)
+      }
       toast.success("图片已上传")
     } catch (error) {
       toast.error(errorMessage(error))
@@ -729,13 +782,15 @@ export function AdminPage() {
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
-        <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-5 xl:grid-cols-9">
+        <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-5 xl:grid-cols-11">
           <TabsTrigger value="overview">概览</TabsTrigger>
           <TabsTrigger value="users">用户</TabsTrigger>
           <TabsTrigger value="usage">用量</TabsTrigger>
           <TabsTrigger value="pricing">定价</TabsTrigger>
           <TabsTrigger value="codes">兑换码</TabsTrigger>
           <TabsTrigger value="docs">文档</TabsTrigger>
+          <TabsTrigger value="terms">服务条款</TabsTrigger>
+          <TabsTrigger value="privacy">隐私政策</TabsTrigger>
           <TabsTrigger value="announcement">公告</TabsTrigger>
           <TabsTrigger value="openai">OpenAI</TabsTrigger>
           <TabsTrigger value="payment">支付</TabsTrigger>
@@ -1222,7 +1277,7 @@ export function AdminPage() {
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="docs-image">图片</FieldLabel>
-                    <Input id="docs-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => void uploadDocsImage(event)} />
+                    <Input id="docs-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => void uploadContentImage("docs", event)} />
                   </Field>
                   <Field>
                     <FieldLabel htmlFor="docs-body">Markdown</FieldLabel>
@@ -1243,6 +1298,112 @@ export function AdminPage() {
               <CardDescription>更新于 {formatDate(docs?.updatedAt)}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">{docsBody.trim() ? renderMarkdown(docsBody) : <div className="text-sm text-muted-foreground">暂无内容</div>}</CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="terms" className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <Card>
+            <CardHeader>
+              <CardTitle>服务条款编辑</CardTitle>
+              <CardDescription>正文使用 Markdown，登录和注册页会读取这里的内容。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-5" onSubmit={(event) => void saveContent("terms", event)}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="terms-title">标题</FieldLabel>
+                    <Input id="terms-title" value={termsTitle} onChange={(event) => setTermsTitle(event.target.value)} />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="terms-active">状态</FieldLabel>
+                    <Select value={termsActive ? "true" : "false"} onValueChange={(value) => setTermsActive(value === "true")}>
+                      <SelectTrigger id="terms-active" className="w-full">
+                        <SelectValue>{termsActive ? "发布" : "隐藏"}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="true">发布</SelectItem>
+                          <SelectItem value="false">隐藏</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="terms-image">图片</FieldLabel>
+                    <Input id="terms-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => void uploadContentImage("terms", event)} />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="terms-body">Markdown</FieldLabel>
+                    <Textarea id="terms-body" className="min-h-[420px] font-mono text-sm" value={termsBody} onChange={(event) => setTermsBody(event.target.value)} />
+                  </Field>
+                </FieldGroup>
+                <Button type="submit">
+                  <Save data-icon="inline-start" />
+                  保存服务条款
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{termsTitle || terms?.title || "服务条款预览"}</CardTitle>
+              <CardDescription>更新于 {formatDate(terms?.updatedAt)}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">{termsBody.trim() ? renderMarkdown(termsBody) : <div className="text-sm text-muted-foreground">暂无内容</div>}</CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="privacy" className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <Card>
+            <CardHeader>
+              <CardTitle>隐私政策编辑</CardTitle>
+              <CardDescription>正文使用 Markdown，登录和注册页会读取这里的内容。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-5" onSubmit={(event) => void saveContent("privacy", event)}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="privacy-title">标题</FieldLabel>
+                    <Input id="privacy-title" value={privacyTitle} onChange={(event) => setPrivacyTitle(event.target.value)} />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="privacy-active">状态</FieldLabel>
+                    <Select value={privacyActive ? "true" : "false"} onValueChange={(value) => setPrivacyActive(value === "true")}>
+                      <SelectTrigger id="privacy-active" className="w-full">
+                        <SelectValue>{privacyActive ? "发布" : "隐藏"}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="true">发布</SelectItem>
+                          <SelectItem value="false">隐藏</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="privacy-image">图片</FieldLabel>
+                    <Input id="privacy-image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => void uploadContentImage("privacy", event)} />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="privacy-body">Markdown</FieldLabel>
+                    <Textarea id="privacy-body" className="min-h-[420px] font-mono text-sm" value={privacyBody} onChange={(event) => setPrivacyBody(event.target.value)} />
+                  </Field>
+                </FieldGroup>
+                <Button type="submit">
+                  <Save data-icon="inline-start" />
+                  保存隐私政策
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{privacyTitle || privacy?.title || "隐私政策预览"}</CardTitle>
+              <CardDescription>更新于 {formatDate(privacy?.updatedAt)}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">{privacyBody.trim() ? renderMarkdown(privacyBody) : <div className="text-sm text-muted-foreground">暂无内容</div>}</CardContent>
           </Card>
         </TabsContent>
 
