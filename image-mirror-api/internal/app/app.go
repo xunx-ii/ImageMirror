@@ -26,6 +26,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/redemptions"
 	"github.com/linxunxi/image-mirror/internal/storage"
 	"github.com/linxunxi/image-mirror/internal/systemconfig"
+	"github.com/linxunxi/image-mirror/internal/usage"
 	"github.com/linxunxi/image-mirror/internal/users"
 )
 
@@ -97,8 +98,10 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 	paymentSvc := payments.NewService(db, systemConfigSvc, cfg.PublicBaseURL)
 	redemptionSvc := redemptions.NewService(db)
 	contentSvc := content.NewService(db, storageSvc)
+	usageSvc := usage.NewService(db)
 	queueClient := queue.NewClient(redisOpt, cfg.OpenAITimeout+time.Minute)
 	adminSvc := admin.NewService(db, usersRepo, billingSvc)
+	imagesSvc.SetUsageService(usageSvc)
 
 	services := httpapi.Services{
 		Config:      cfg,
@@ -111,6 +114,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 		Payments:    paymentSvc,
 		Redemptions: redemptionSvc,
 		Content:     contentSvc,
+		Usage:       usageSvc,
 		Queue:       queueClient,
 		Admin:       adminSvc,
 		ConfigStore: systemConfigSvc,

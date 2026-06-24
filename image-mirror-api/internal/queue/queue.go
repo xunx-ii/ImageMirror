@@ -9,6 +9,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/linxunxi/image-mirror/internal/images"
+	"github.com/linxunxi/image-mirror/internal/usage"
 )
 
 const (
@@ -47,11 +48,12 @@ func (c *Client) EnqueueGenerate(ctx context.Context, imageID string) error {
 
 type Processor struct {
 	images *images.Service
+	usage  *usage.Service
 	logger *slog.Logger
 }
 
-func NewProcessor(imagesSvc *images.Service, logger *slog.Logger) *Processor {
-	return &Processor{images: imagesSvc, logger: logger}
+func NewProcessor(imagesSvc *images.Service, usageSvc *usage.Service, logger *slog.Logger) *Processor {
+	return &Processor{images: imagesSvc, usage: usageSvc, logger: logger}
 }
 
 func (p *Processor) Mux() *asynq.ServeMux {
@@ -81,6 +83,15 @@ func (p *Processor) handleCleanup(ctx context.Context, _ *asynq.Task) error {
 	}
 	if err == nil {
 		err = recoverErr
+	}
+	if p.usage != nil {
+		deleted, usageErr := p.usage.CleanupExpired(ctx, 1000)
+		if usageErr == nil && deleted > 0 {
+			p.logger.Info("usage log cleanup completed", "deleted", deleted)
+		}
+		if err == nil {
+			err = usageErr
+		}
 	}
 	return err
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/pricing"
 	"github.com/linxunxi/image-mirror/internal/storage"
 	"github.com/linxunxi/image-mirror/internal/systemconfig"
+	"github.com/linxunxi/image-mirror/internal/usage"
 )
 
 type Generation struct {
@@ -68,10 +69,15 @@ type Service struct {
 	storage *storage.Local
 	openai  *openai.Client
 	configs *systemconfig.Service
+	usage   *usage.Service
 }
 
 func NewService(cfg config.Config, db *pgxpool.Pool, pricingSvc *pricing.Service, billingSvc *billing.Service, storageSvc *storage.Local, openAIClient *openai.Client, configSvc *systemconfig.Service) *Service {
 	return &Service{cfg: cfg, db: db, pricing: pricingSvc, billing: billingSvc, storage: storageSvc, openai: openAIClient, configs: configSvc}
+}
+
+func (s *Service) SetUsageService(usageSvc *usage.Service) {
+	s.usage = usageSvc
 }
 
 const (
@@ -254,6 +260,15 @@ func (s *Service) Process(ctx context.Context, imageID string) error {
 		s.deleteReferenceImages(ctx, gen.ReferenceKeys)
 		return nil
 	}
+	if s.usage != nil {
+		statusCode := 200
+		_ = s.usage.CompleteByImageID(ctx, usage.CompleteInput{
+			ImageGenerationID: gen.ID,
+			Status:            "COMPLETED",
+			Success:           true,
+			StatusCode:        &statusCode,
+		})
+	}
 	s.deleteReferenceImages(ctx, gen.ReferenceKeys)
 	return nil
 }
@@ -309,6 +324,16 @@ func (s *Service) CancelPending(ctx context.Context, imageID string, reason stri
 	}
 	if tag.RowsAffected() == 0 {
 		return nil
+	}
+	if s.usage != nil {
+		statusCode := 500
+		_ = s.usage.CompleteByImageID(ctx, usage.CompleteInput{
+			ImageGenerationID: gen.ID,
+			Status:            "FAILED",
+			Success:           false,
+			StatusCode:        &statusCode,
+			ErrorMessage:      &reason,
+		})
 	}
 	s.deleteReferenceImages(ctx, gen.ReferenceKeys)
 	return s.billing.Refund(ctx, gen.UserID, gen.CreditsCost, reason, gen.ID)
@@ -666,6 +691,16 @@ func (s *Service) failGeneration(gen Generation, message string, refundDescripti
 		WHERE id=$1 AND status IN ('PENDING', 'PROCESSING')
 	`, gen.ID, message)
 	if tag.RowsAffected() > 0 {
+		if s.usage != nil {
+			statusCode := 502
+			_ = s.usage.CompleteByImageID(ctx, usage.CompleteInput{
+				ImageGenerationID: gen.ID,
+				Status:            "FAILED",
+				Success:           false,
+				StatusCode:        &statusCode,
+				ErrorMessage:      &message,
+			})
+		}
 		_ = s.billing.Refund(ctx, gen.UserID, gen.CreditsCost, refundDescription, gen.ID)
 		s.deleteReferenceImages(ctx, gen.ReferenceKeys)
 	}

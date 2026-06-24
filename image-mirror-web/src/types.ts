@@ -77,6 +77,46 @@ export type AdminOverview = {
   creditsConsumed: number
 }
 
+export type UsageLog = {
+  id: string
+  userId?: string
+  userEmail: string
+  apiKeyId?: string
+  apiKeyName?: string
+  apiKeyPrefix?: string
+  imageGenerationId?: string
+  source: "WEB" | "API"
+  method: string
+  path: string
+  ipAddress: string
+  userAgent: string
+  model: string
+  prompt: string
+  size: string
+  quality: string
+  referenceCount: number
+  creditsCost: number
+  status: string
+  success: boolean
+  statusCode?: number
+  durationMs?: number
+  errorMessage?: string
+  completedAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type UsageLogList = {
+  data: UsageLog[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type UsageRetention = {
+  days: number
+}
+
 export type OpenAISettings = {
   openaiBaseUrl: string
   hasOpenaiApiKey: boolean

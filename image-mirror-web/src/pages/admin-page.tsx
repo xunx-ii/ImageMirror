@@ -12,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Shield,
   ToggleLeft,
   ToggleRight,
@@ -26,6 +27,7 @@ import { PageHeader } from "@/components/page-header"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -38,7 +40,7 @@ import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
 import { defaultPlatformSettings, emitPlatformSettingsUpdated, mergePlatformSettings } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { AdminOverview, ContentAsset, EPaySettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, User } from "@/types"
+import type { AdminOverview, ContentAsset, EPaySettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
 
@@ -75,10 +77,12 @@ export function AdminPage() {
   const [quality, setQuality] = useState("medium")
   const [credits, setCredits] = useState(8)
   const [editingPricingId, setEditingPricingId] = useState<string | null>(null)
+  const [pricingDialogOpen, setPricingDialogOpen] = useState(false)
 
   const [codeCredits, setCodeCredits] = useState(100)
   const [codeCount, setCodeCount] = useState(1)
   const [codeExpiresAt, setCodeExpiresAt] = useState("")
+  const [codeDialogOpen, setCodeDialogOpen] = useState(false)
 
   const [docsTitle, setDocsTitle] = useState("文档")
   const [docsBody, setDocsBody] = useState("")
@@ -96,6 +100,7 @@ export function AdminPage() {
   const [openAISchedulable, setOpenAISchedulable] = useState(true)
   const [openAIPriority, setOpenAIPriority] = useState(100)
   const [editingOpenAIEndpointId, setEditingOpenAIEndpointId] = useState<string | null>(null)
+  const [openAIEndpointDialogOpen, setOpenAIEndpointDialogOpen] = useState(false)
   const [epayGateway, setEPayGateway] = useState("https://pay.example.com")
   const [epayPID, setEPayPID] = useState("")
   const [epayKey, setEPayKey] = useState("")
@@ -103,11 +108,40 @@ export function AdminPage() {
   const [epayCreditsPerYuan, setEPayCreditsPerYuan] = useState(100)
   const [epayEnabled, setEPayEnabled] = useState(false)
   const [adjustments, setAdjustments] = useState<Record<string, number>>({})
+  const [activeTab, setActiveTab] = useState("overview")
+  const [usageLogs, setUsageLogs] = useState<UsageLog[]>([])
+  const [usageTotal, setUsageTotal] = useState(0)
+  const [usageLimit] = useState(20)
+  const [usageOffset, setUsageOffset] = useState(0)
+  const [usageUserQuery, setUsageUserQuery] = useState("")
+  const [usagePromptQuery, setUsagePromptQuery] = useState("")
+  const [usageSource, setUsageSource] = useState("all")
+  const [usageSuccess, setUsageSuccess] = useState("all")
+  const [usageAfter, setUsageAfter] = useState("")
+  const [usageBefore, setUsageBefore] = useState("")
+  const [usageFilters, setUsageFilters] = useState({
+    user: "",
+    prompt: "",
+    source: "all",
+    success: "all",
+    after: "",
+    before: "",
+  })
+  const [usageRetentionDays, setUsageRetentionDays] = useState(90)
+  const [usageDeleteDays, setUsageDeleteDays] = useState(90)
+  const [usageDeleteBefore, setUsageDeleteBefore] = useState("")
+  const [usageRetentionDialogOpen, setUsageRetentionDialogOpen] = useState(false)
+  const [usageDeleteDialogOpen, setUsageDeleteDialogOpen] = useState(false)
+  const [usageLoading, setUsageLoading] = useState(false)
 
   const selectedCodeSet = useMemo(() => new Set(selectedCodes), [selectedCodes])
   const allCodesSelected = codes.length > 0 && selectedCodes.length === codes.length
   const enabledResolutionBuckets = useMemo(() => resolutionBuckets.filter((item) => platform.allow4k || item !== "4k"), [platform.allow4k])
   const visiblePricing = useMemo(() => pricing.filter((rule) => platform.allow4k || rule.size !== "4k"), [platform.allow4k, pricing])
+  const usagePage = Math.floor(usageOffset / usageLimit) + 1
+  const usageTotalPages = Math.max(1, Math.ceil(usageTotal / usageLimit))
+  const usageCanPrev = usageOffset > 0
+  const usageCanNext = usageOffset + usageLimit < usageTotal
 
   const load = useCallback(async () => {
     try {
@@ -166,6 +200,42 @@ export function AdminPage() {
     return () => window.clearTimeout(timer)
   }, [load])
 
+  const loadUsageLogs = useCallback(async () => {
+    setUsageLoading(true)
+    try {
+      const params = new URLSearchParams({
+        limit: String(usageLimit),
+        offset: String(usageOffset),
+      })
+      if (usageFilters.user.trim()) params.set("user", usageFilters.user.trim())
+      if (usageFilters.prompt.trim()) params.set("prompt", usageFilters.prompt.trim())
+      if (usageFilters.source !== "all") params.set("source", usageFilters.source)
+      if (usageFilters.success !== "all") params.set("success", usageFilters.success)
+      if (usageFilters.after) params.set("after", new Date(usageFilters.after).toISOString())
+      if (usageFilters.before) params.set("before", new Date(usageFilters.before).toISOString())
+      const [logsResponse, retentionResponse] = await Promise.all([
+        api.get<UsageLogList>(`/api/admin/usage-logs?${params.toString()}`),
+        api.get<UsageRetention>("/api/admin/usage-logs/retention"),
+      ])
+      setUsageLogs(logsResponse.data.data ?? [])
+      setUsageTotal(logsResponse.data.total ?? 0)
+      setUsageRetentionDays(retentionResponse.data.days)
+      setUsageDeleteDays((value) => (value > 0 ? value : retentionResponse.data.days))
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setUsageLoading(false)
+    }
+  }, [usageFilters, usageLimit, usageOffset])
+
+  useEffect(() => {
+    if (activeTab !== "usage") return
+    const timer = window.setTimeout(() => {
+      void loadUsageLogs()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [activeTab, loadUsageLogs])
+
   async function savePricing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     try {
@@ -183,6 +253,7 @@ export function AdminPage() {
       }
       toast.success(editingPricingId ? "定价已更新" : "定价已新增")
       resetPricingForm()
+      setPricingDialogOpen(false)
       await load()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -235,6 +306,8 @@ export function AdminPage() {
       const { data } = await api.post<{ data: RedemptionCode[] }>("/api/admin/redemption-codes", payload)
       toast.success(`已生成 ${data.data.length} 个兑换码`)
       setSelectedCodes([])
+      setCodeExpiresAt("")
+      setCodeDialogOpen(false)
       await load()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -351,6 +424,7 @@ export function AdminPage() {
       }
       await refreshOpenAISettings()
       resetOpenAIForm()
+      setOpenAIEndpointDialogOpen(false)
       toast.success(editingOpenAIEndpointId ? "API 节点已更新" : "API 节点已新增")
     } catch (error) {
       toast.error(errorMessage(error))
@@ -365,6 +439,7 @@ export function AdminPage() {
     setOpenAIEnabled(endpoint.enabled)
     setOpenAISchedulable(endpoint.schedulable)
     setOpenAIPriority(endpoint.priority)
+    setOpenAIEndpointDialogOpen(true)
   }
 
   function resetOpenAIForm() {
@@ -375,6 +450,16 @@ export function AdminPage() {
     setOpenAIEnabled(true)
     setOpenAISchedulable(true)
     setOpenAIPriority(100)
+  }
+
+  function openNewOpenAIEndpointDialog() {
+    resetOpenAIForm()
+    setOpenAIEndpointDialogOpen(true)
+  }
+
+  function closeOpenAIEndpointDialog() {
+    setOpenAIEndpointDialogOpen(false)
+    resetOpenAIForm()
   }
 
   async function deleteOpenAIEndpoint(endpoint: OpenAIEndpoint) {
@@ -472,12 +557,71 @@ export function AdminPage() {
     }
   }
 
+  function searchUsageLogs(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setUsageOffset(0)
+    setUsageFilters({
+      user: usageUserQuery,
+      prompt: usagePromptQuery,
+      source: usageSource,
+      success: usageSuccess,
+      after: usageAfter,
+      before: usageBefore,
+    })
+  }
+
+  async function saveUsageRetention(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    try {
+      const { data } = await api.put<UsageRetention>("/api/admin/usage-logs/retention", {
+        days: usageRetentionDays,
+      })
+      setUsageRetentionDays(data.days)
+      setUsageRetentionDialogOpen(false)
+      toast.success(data.days === 0 ? "已关闭自动清理" : `自动清理已设置为保留 ${data.days} 天`)
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  async function deleteUsageLogs(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const payload: { before?: string; days?: number } = {}
+    let label = `${usageDeleteDays} 天前`
+    if (usageDeleteBefore) {
+      const before = new Date(usageDeleteBefore)
+      if (Number.isNaN(before.getTime())) {
+        toast.error("删除截止时间无效")
+        return
+      }
+      payload.before = before.toISOString()
+      label = `${before.toLocaleString("zh-CN")} 之前`
+    } else if (usageDeleteDays > 0) {
+      payload.days = usageDeleteDays
+    } else {
+      toast.error("请输入大于 0 的天数")
+      return
+    }
+    if (!window.confirm(`确认删除 ${label} 的用量日志？`)) return
+    try {
+      const { data } = await api.delete<{ count: number }>("/api/admin/usage-logs", {
+        data: payload,
+      })
+      toast.success(`已删除 ${data.count} 条日志`)
+      setUsageDeleteDialogOpen(false)
+      await loadUsageLogs()
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
   function editPricing(rule: PricingRule) {
     setEditingPricingId(rule.id)
     setModel(rule.model)
     setSize(rule.size)
     setQuality(rule.quality)
     setCredits(rule.credits)
+    setPricingDialogOpen(true)
   }
 
   function resetPricingForm() {
@@ -486,6 +630,20 @@ export function AdminPage() {
     setSize("1k")
     setQuality("medium")
     setCredits(8)
+  }
+
+  function openNewPricingDialog() {
+    resetPricingForm()
+    setPricingDialogOpen(true)
+  }
+
+  function closePricingDialog() {
+    setPricingDialogOpen(false)
+    resetPricingForm()
+  }
+
+  function closeCodeDialog() {
+    setCodeDialogOpen(false)
   }
 
   function toggleCode(id: string) {
@@ -518,10 +676,11 @@ export function AdminPage() {
         }
       />
 
-      <Tabs defaultValue="overview" className="gap-4">
-        <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
+        <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-5 xl:grid-cols-9">
           <TabsTrigger value="overview">概览</TabsTrigger>
           <TabsTrigger value="users">用户</TabsTrigger>
+          <TabsTrigger value="usage">用量</TabsTrigger>
           <TabsTrigger value="pricing">定价</TabsTrigger>
           <TabsTrigger value="codes">兑换码</TabsTrigger>
           <TabsTrigger value="docs">文档</TabsTrigger>
@@ -654,73 +813,166 @@ export function AdminPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="pricing" className="grid gap-4 lg:grid-cols-[360px_1fr]">
+        <TabsContent value="usage" className="flex flex-col gap-4">
           <Card>
             <CardHeader>
-              <CardTitle>{editingPricingId ? "编辑定价" : "新增定价"}</CardTitle>
-              <CardDescription>按模型、分辨率档位和质量维护每次调用积分。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="flex flex-col gap-5" onSubmit={savePricing}>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="pricing-model">模型</FieldLabel>
-                    <Input id="pricing-model" value={model} onChange={(event) => setModel(event.target.value)} />
-                  </Field>
-                  <Field>
-                    <FieldLabel>分辨率档位</FieldLabel>
-                    <Select value={size} onValueChange={(value) => setSize(value ?? size)}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {enabledResolutionBuckets.map((item) => (
-                            <SelectItem key={item} value={item}>
-                              {item.toUpperCase()}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field>
-                    <FieldLabel>质量</FieldLabel>
-                    <Select value={quality} onValueChange={(value) => setQuality(value ?? quality)}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue>{qualityLabel(quality)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {qualities.map((item) => (
-                            <SelectItem key={item} value={item}>
-                              {qualityLabel(item)}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="credits">积分</FieldLabel>
-                    <Input id="credits" type="number" min={1} value={credits} onChange={(event) => setCredits(Number(event.target.value))} />
-                  </Field>
-                </FieldGroup>
-                <div className="flex gap-2">
-                  <Button type="submit">
-                    {editingPricingId ? <Save data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
-                    {editingPricingId ? "更新" : "新增"}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle>用量统计</CardTitle>
+                  <CardDescription>查看用户请求、IP、耗时、消耗和生成结果。</CardDescription>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setUsageRetentionDialogOpen(true)}>
+                    <Save data-icon="inline-start" />
+                    自动清理
                   </Button>
-                  {editingPricingId && (
-                    <Button type="button" variant="outline" onClick={resetPricingForm}>
-                      取消
-                    </Button>
-                  )}
+                  <Button variant="outline" onClick={() => setUsageDeleteDialogOpen(true)}>
+                    <Trash2 data-icon="inline-start" />
+                    删除日志
+                  </Button>
+                  <Button variant="outline" onClick={() => void loadUsageLogs()} disabled={usageLoading}>
+                    <RefreshCw data-icon="inline-start" />
+                    刷新
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <form className="grid gap-3 lg:grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_130px_130px_170px_170px_auto]" onSubmit={searchUsageLogs}>
+                <Field>
+                  <FieldLabel htmlFor="usage-user">用户</FieldLabel>
+                  <Input id="usage-user" placeholder="邮箱或用户 ID" value={usageUserQuery} onChange={(event) => setUsageUserQuery(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="usage-prompt">提示词</FieldLabel>
+                  <Input id="usage-prompt" placeholder="搜索提示词" value={usagePromptQuery} onChange={(event) => setUsagePromptQuery(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="usage-source">来源</FieldLabel>
+                  <Select value={usageSource} onValueChange={(value) => setUsageSource(value ?? "all")}>
+                    <SelectTrigger id="usage-source" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="all">全部</SelectItem>
+                        <SelectItem value="WEB">前台</SelectItem>
+                        <SelectItem value="API">API</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="usage-success">结果</FieldLabel>
+                  <Select value={usageSuccess} onValueChange={(value) => setUsageSuccess(value ?? "all")}>
+                    <SelectTrigger id="usage-success" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="all">全部</SelectItem>
+                        <SelectItem value="true">成功</SelectItem>
+                        <SelectItem value="false">失败</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="usage-after">开始</FieldLabel>
+                  <Input id="usage-after" type="datetime-local" value={usageAfter} onChange={(event) => setUsageAfter(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="usage-before">结束</FieldLabel>
+                  <Input id="usage-before" type="datetime-local" value={usageBefore} onChange={(event) => setUsageBefore(event.target.value)} />
+                </Field>
+                <div className="flex items-end">
+                  <Button type="submit" className="w-full lg:w-auto">
+                    <Search data-icon="inline-start" />
+                    搜索
+                  </Button>
                 </div>
               </form>
+
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>时间</TableHead>
+                    <TableHead>用户</TableHead>
+                    <TableHead>IP / 来源</TableHead>
+                    <TableHead>调用记录</TableHead>
+                    <TableHead>耗时</TableHead>
+                    <TableHead>消耗</TableHead>
+                    <TableHead>提示词</TableHead>
+                    <TableHead>结果</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {usageLogs.map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell>{formatDate(log.createdAt)}</TableCell>
+                      <TableCell>
+                        <div className="flex min-w-[180px] flex-col gap-1">
+                          <span className="truncate font-medium">{log.userEmail || "-"}</span>
+                          {log.apiKeyName && <span className="truncate text-xs text-muted-foreground">Key {log.apiKeyName}</span>}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex min-w-[150px] flex-col gap-1">
+                          <span className="font-mono text-xs">{log.ipAddress || "-"}</span>
+                          <Badge variant="outline">{log.source}</Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex min-w-[170px] flex-col gap-1 text-xs">
+                          <span>{log.method} {log.path}</span>
+                          <span className="text-muted-foreground">
+                            {log.model} / {log.size} / {qualityLabel(log.quality)}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="tabular-nums">{formatDuration(log.durationMs)}</TableCell>
+                      <TableCell className="tabular-nums">{log.creditsCost}</TableCell>
+                      <TableCell>
+                        <div className="line-clamp-2 min-w-[260px] max-w-[420px] text-sm">{log.prompt || "-"}</div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex min-w-[160px] flex-col gap-1">
+                          <Badge variant={log.success ? "secondary" : "destructive"}>{log.success ? "成功" : "失败"}</Badge>
+                          <span className="text-xs text-muted-foreground">{log.statusCode ?? "-"} / {log.status}</span>
+                          {log.errorMessage && <span className="line-clamp-1 text-xs text-destructive">{log.errorMessage}</span>}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {!usageLoading && usageLogs.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                        暂无用量日志
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm text-muted-foreground">
+                  共 {usageTotal} 条，第 {usagePage} / {usageTotalPages} 页
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" disabled={!usageCanPrev || usageLoading} onClick={() => setUsageOffset((value) => Math.max(0, value - usageLimit))}>
+                    上一页
+                  </Button>
+                  <Button variant="outline" disabled={!usageCanNext || usageLoading} onClick={() => setUsageOffset((value) => value + usageLimit)}>
+                    下一页
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
+        </TabsContent>
+
+        <TabsContent value="pricing">
           <Card>
             <CardHeader>
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -728,10 +980,16 @@ export function AdminPage() {
                   <CardTitle>价格规则</CardTitle>
                   <CardDescription>删除后规则会从计费和前台价格列表中移除。</CardDescription>
                 </div>
-                <Button variant="outline" onClick={() => void toggle4K()}>
-                  {platform.allow4k ? <ToggleRight data-icon="inline-start" /> : <ToggleLeft data-icon="inline-start" />}
-                  {platform.allow4k ? "禁用 4K" : "启用 4K"}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={openNewPricingDialog}>
+                    <Plus data-icon="inline-start" />
+                    新增定价
+                  </Button>
+                  <Button variant="outline" onClick={() => void toggle4K()}>
+                    {platform.allow4k ? <ToggleRight data-icon="inline-start" /> : <ToggleLeft data-icon="inline-start" />}
+                    {platform.allow4k ? "禁用 4K" : "启用 4K"}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -770,37 +1028,7 @@ export function AdminPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="codes" className="grid gap-4 lg:grid-cols-[360px_1fr]">
-          <Card>
-            <CardHeader>
-              <CardTitle>生成兑换码</CardTitle>
-              <CardDescription>生成后用户可在账单页兑换为余额。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="flex flex-col gap-5" onSubmit={generateCodes}>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="code-credits">额度</FieldLabel>
-                    <Input id="code-credits" type="number" min={1} value={codeCredits} onChange={(event) => setCodeCredits(Number(event.target.value))} />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="code-count">数量</FieldLabel>
-                    <Input id="code-count" type="number" min={1} max={500} value={codeCount} onChange={(event) => setCodeCount(Number(event.target.value))} />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="code-expires">过期时间</FieldLabel>
-                    <Input id="code-expires" type="datetime-local" value={codeExpiresAt} onChange={(event) => setCodeExpiresAt(event.target.value)} />
-                    <FieldDescription>留空则长期有效。</FieldDescription>
-                  </Field>
-                </FieldGroup>
-                <Button type="submit">
-                  <Gift data-icon="inline-start" />
-                  生成
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
+        <TabsContent value="codes">
           <Card>
             <CardHeader>
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -809,6 +1037,10 @@ export function AdminPage() {
                   <CardDescription>勾选后可批量复制、停用或删除。</CardDescription>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => setCodeDialogOpen(true)}>
+                    <Gift data-icon="inline-start" />
+                    生成兑换码
+                  </Button>
                   <Button variant="outline" disabled={selectedCodes.length === 0} onClick={copySelectedCodes}>
                     <Copy data-icon="inline-start" />
                     复制
@@ -973,87 +1205,7 @@ export function AdminPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="openai" className="grid gap-4 xl:grid-cols-[360px_1fr]">
-          <Card>
-            <CardHeader>
-              <CardTitle>{editingOpenAIEndpointId ? "编辑 API 节点" : "新增 API 节点"}</CardTitle>
-              <CardDescription>配置兼容 OpenAI 图像接口的 Base URL、密钥和调度策略。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="flex flex-col gap-5" onSubmit={saveOpenAIEndpoint}>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="openai-endpoint-name">名称</FieldLabel>
-                    <Input id="openai-endpoint-name" value={openAIEndpointName} onChange={(event) => setOpenAIEndpointName(event.target.value)} />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="openai-base-url">Base URL</FieldLabel>
-                    <Input id="openai-base-url" value={openAIBaseUrl} onChange={(event) => setOpenAIBaseUrl(event.target.value)} />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="openai-key">API Key</FieldLabel>
-                    <Input
-                      id="openai-key"
-                      type="password"
-                      value={openAIKey}
-                      onChange={(event) => setOpenAIKey(event.target.value)}
-                      placeholder={editingOpenAIEndpointId ? "留空则保持当前密钥" : "输入 API Key"}
-                    />
-                    <FieldDescription>密钥只写入后台配置，保存后不会在页面回显。</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="openai-priority">优先级</FieldLabel>
-                    <Input id="openai-priority" type="number" min={1} max={10000} value={openAIPriority} onChange={(event) => setOpenAIPriority(Math.max(1, Number(event.target.value) || 100))} />
-                    <FieldDescription>数字越小越优先，同优先级按最近使用时间轮询。</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="openai-enabled">启用状态</FieldLabel>
-                    <Select value={openAIEnabled ? "true" : "false"} onValueChange={(value) => setOpenAIEnabled(value === "true")}>
-                      <SelectTrigger id="openai-enabled" className="w-full">
-                        <SelectValue>{openAIEnabled ? "启用" : "停用"}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="true">启用</SelectItem>
-                          <SelectItem value="false">停用</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="openai-schedulable">调度状态</FieldLabel>
-                    <Select value={openAISchedulable ? "true" : "false"} onValueChange={(value) => setOpenAISchedulable(value === "true")}>
-                      <SelectTrigger id="openai-schedulable" className="w-full">
-                        <SelectValue>{openAISchedulable ? "可调度" : "仅保存"}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="true">可调度</SelectItem>
-                          <SelectItem value="false">仅保存</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                </FieldGroup>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant={openAI?.hasOpenaiApiKey ? "secondary" : "outline"}>{openAI?.hasOpenaiApiKey ? "存在可用密钥" : "未配置密钥"}</Badge>
-                  {openAI?.usesEnvironmentKey && <Badge variant="outline">使用环境变量兜底</Badge>}
-                </div>
-                <div className="flex gap-2">
-                  <Button type="submit">
-                    {editingOpenAIEndpointId ? <Save data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
-                    {editingOpenAIEndpointId ? "更新节点" : "新增节点"}
-                  </Button>
-                  {editingOpenAIEndpointId && (
-                    <Button type="button" variant="outline" onClick={resetOpenAIForm}>
-                      取消
-                    </Button>
-                  )}
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-
+        <TabsContent value="openai">
           <Card>
             <CardHeader>
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1061,7 +1213,13 @@ export function AdminPage() {
                   <CardTitle>API 节点</CardTitle>
                   <CardDescription>生成任务会按优先级轮询可调度节点，连续失败后自动熔断。</CardDescription>
                 </div>
-                <Badge variant="secondary">{openAI?.endpoints?.filter((endpoint) => endpoint.enabled && endpoint.schedulable).length ?? 0} 个可调度</Badge>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" onClick={openNewOpenAIEndpointDialog}>
+                    <Plus data-icon="inline-start" />
+                    新增节点
+                  </Button>
+                  <Badge variant="secondary">{openAI?.endpoints?.filter((endpoint) => endpoint.enabled && endpoint.schedulable).length ?? 0} 个可调度</Badge>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -1185,8 +1343,250 @@ export function AdminPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={usageRetentionDialogOpen} onOpenChange={setUsageRetentionDialogOpen}>
+        <DialogContent className="max-h-[90svh] overflow-auto sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>自动清理</DialogTitle>
+            <DialogDescription>worker 每小时清理超过保留天数的用量日志，设置 0 表示关闭。</DialogDescription>
+          </DialogHeader>
+          <form id="usage-retention-form" className="flex flex-col gap-5" onSubmit={saveUsageRetention}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="usage-retention">保留天数</FieldLabel>
+                <Input id="usage-retention" type="number" min={0} max={3650} value={usageRetentionDays} onChange={(event) => setUsageRetentionDays(Number(event.target.value))} />
+              </Field>
+            </FieldGroup>
+          </form>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setUsageRetentionDialogOpen(false)}>
+              取消
+            </Button>
+            <Button type="submit" form="usage-retention-form">
+              <Save data-icon="inline-start" />
+              保存策略
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={usageDeleteDialogOpen} onOpenChange={setUsageDeleteDialogOpen}>
+        <DialogContent className="max-h-[90svh] overflow-auto sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>手动删除</DialogTitle>
+            <DialogDescription>立即删除指定时间之前的日志，用于控制日志体积。</DialogDescription>
+          </DialogHeader>
+          <form id="usage-delete-form" className="flex flex-col gap-5" onSubmit={deleteUsageLogs}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="usage-delete-days">删除多少天前</FieldLabel>
+                <Input id="usage-delete-days" type="number" min={1} max={3650} value={usageDeleteDays} onChange={(event) => setUsageDeleteDays(Number(event.target.value))} />
+                <FieldDescription>未填写截止时间时，按这个天数删除。</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="usage-delete-before">指定截止时间</FieldLabel>
+                <Input id="usage-delete-before" type="datetime-local" value={usageDeleteBefore} onChange={(event) => setUsageDeleteBefore(event.target.value)} />
+              </Field>
+            </FieldGroup>
+          </form>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setUsageDeleteDialogOpen(false)}>
+              取消
+            </Button>
+            <Button type="submit" variant="outline" form="usage-delete-form">
+              <Trash2 data-icon="inline-start" />
+              删除日志
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pricingDialogOpen} onOpenChange={(open) => (open ? setPricingDialogOpen(true) : closePricingDialog())}>
+        <DialogContent className="max-h-[90svh] overflow-auto sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{editingPricingId ? "编辑定价" : "新增定价"}</DialogTitle>
+            <DialogDescription>按模型、分辨率档位和质量维护每次调用积分。</DialogDescription>
+          </DialogHeader>
+          <form id="pricing-form" className="flex flex-col gap-5" onSubmit={savePricing}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="pricing-model">模型</FieldLabel>
+                <Input id="pricing-model" value={model} onChange={(event) => setModel(event.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="pricing-size">分辨率档位</FieldLabel>
+                <Select value={size} onValueChange={(value) => setSize(value ?? size)}>
+                  <SelectTrigger id="pricing-size" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {enabledResolutionBuckets.map((item) => (
+                        <SelectItem key={item} value={item}>
+                          {item.toUpperCase()}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="pricing-quality">质量</FieldLabel>
+                <Select value={quality} onValueChange={(value) => setQuality(value ?? quality)}>
+                  <SelectTrigger id="pricing-quality" className="w-full">
+                    <SelectValue>{qualityLabel(quality)}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {qualities.map((item) => (
+                        <SelectItem key={item} value={item}>
+                          {qualityLabel(item)}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="credits">积分</FieldLabel>
+                <Input id="credits" type="number" min={1} value={credits} onChange={(event) => setCredits(Number(event.target.value))} />
+              </Field>
+            </FieldGroup>
+          </form>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closePricingDialog}>
+              取消
+            </Button>
+            <Button type="submit" form="pricing-form">
+              {editingPricingId ? <Save data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
+              {editingPricingId ? "更新" : "新增"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={codeDialogOpen} onOpenChange={(open) => (open ? setCodeDialogOpen(true) : closeCodeDialog())}>
+        <DialogContent className="max-h-[90svh] overflow-auto sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>生成兑换码</DialogTitle>
+            <DialogDescription>生成后用户可在账单页兑换为余额。</DialogDescription>
+          </DialogHeader>
+          <form id="redemption-code-form" className="flex flex-col gap-5" onSubmit={generateCodes}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="code-credits">额度</FieldLabel>
+                <Input id="code-credits" type="number" min={1} value={codeCredits} onChange={(event) => setCodeCredits(Number(event.target.value))} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="code-count">数量</FieldLabel>
+                <Input id="code-count" type="number" min={1} max={500} value={codeCount} onChange={(event) => setCodeCount(Number(event.target.value))} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="code-expires">过期时间</FieldLabel>
+                <Input id="code-expires" type="datetime-local" value={codeExpiresAt} onChange={(event) => setCodeExpiresAt(event.target.value)} />
+                <FieldDescription>留空则长期有效。</FieldDescription>
+              </Field>
+            </FieldGroup>
+          </form>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeCodeDialog}>
+              取消
+            </Button>
+            <Button type="submit" form="redemption-code-form">
+              <Gift data-icon="inline-start" />
+              生成
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={openAIEndpointDialogOpen} onOpenChange={(open) => (open ? setOpenAIEndpointDialogOpen(true) : closeOpenAIEndpointDialog())}>
+        <DialogContent className="max-h-[90svh] overflow-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{editingOpenAIEndpointId ? "编辑 API 节点" : "新增 API 节点"}</DialogTitle>
+            <DialogDescription>配置兼容 OpenAI 图像接口的 Base URL、密钥和调度策略。</DialogDescription>
+          </DialogHeader>
+          <form id="openai-endpoint-form" className="flex flex-col gap-5" onSubmit={saveOpenAIEndpoint}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="openai-endpoint-name">名称</FieldLabel>
+                <Input id="openai-endpoint-name" value={openAIEndpointName} onChange={(event) => setOpenAIEndpointName(event.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="openai-base-url">Base URL</FieldLabel>
+                <Input id="openai-base-url" value={openAIBaseUrl} onChange={(event) => setOpenAIBaseUrl(event.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="openai-key">API Key</FieldLabel>
+                <Input
+                  id="openai-key"
+                  type="password"
+                  value={openAIKey}
+                  onChange={(event) => setOpenAIKey(event.target.value)}
+                  placeholder={editingOpenAIEndpointId ? "留空则保持当前密钥" : "输入 API Key"}
+                />
+                <FieldDescription>密钥只写入后台配置，保存后不会在页面回显。</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="openai-priority">优先级</FieldLabel>
+                <Input id="openai-priority" type="number" min={1} max={10000} value={openAIPriority} onChange={(event) => setOpenAIPriority(Math.max(1, Number(event.target.value) || 100))} />
+                <FieldDescription>数字越小越优先，同优先级按最近使用时间轮询。</FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="openai-enabled">启用状态</FieldLabel>
+                <Select value={openAIEnabled ? "true" : "false"} onValueChange={(value) => setOpenAIEnabled(value === "true")}>
+                  <SelectTrigger id="openai-enabled" className="w-full">
+                    <SelectValue>{openAIEnabled ? "启用" : "停用"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="true">启用</SelectItem>
+                      <SelectItem value="false">停用</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="openai-schedulable">调度状态</FieldLabel>
+                <Select value={openAISchedulable ? "true" : "false"} onValueChange={(value) => setOpenAISchedulable(value === "true")}>
+                  <SelectTrigger id="openai-schedulable" className="w-full">
+                    <SelectValue>{openAISchedulable ? "可调度" : "仅保存"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="true">可调度</SelectItem>
+                      <SelectItem value="false">仅保存</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </FieldGroup>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={openAI?.hasOpenaiApiKey ? "secondary" : "outline"}>{openAI?.hasOpenaiApiKey ? "存在可用密钥" : "未配置密钥"}</Badge>
+              {openAI?.usesEnvironmentKey && <Badge variant="outline">使用环境变量兜底</Badge>}
+            </div>
+          </form>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeOpenAIEndpointDialog}>
+              取消
+            </Button>
+            <Button type="submit" form="openai-endpoint-form">
+              {editingOpenAIEndpointId ? <Save data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
+              {editingOpenAIEndpointId ? "更新节点" : "新增节点"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
+}
+
+function formatDuration(value?: number) {
+  if (value == null) return "-"
+  if (value < 1000) return `${value} ms`
+  const seconds = value / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)} s`
+  return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`
 }
 
 function AdminMetric({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number }) {

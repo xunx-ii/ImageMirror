@@ -23,6 +23,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/queue"
 	"github.com/linxunxi/image-mirror/internal/redemptions"
 	"github.com/linxunxi/image-mirror/internal/systemconfig"
+	"github.com/linxunxi/image-mirror/internal/usage"
 	"github.com/linxunxi/image-mirror/internal/users"
 )
 
@@ -37,6 +38,7 @@ type Services struct {
 	Payments    *payments.Service
 	Redemptions *redemptions.Service
 	Content     *content.Service
+	Usage       *usage.Service
 	Queue       *queue.Client
 	Admin       *admin.Service
 	ConfigStore *systemconfig.Service
@@ -111,6 +113,10 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.PUT("/content/:key", updateContentHandler(s.Content))
 	adminGroup.POST("/content/:key/assets", uploadContentAssetHandler(s.Content))
 	adminGroup.GET("/stats/overview", adminStatsHandler(s.Admin))
+	adminGroup.GET("/usage-logs", adminUsageLogsHandler(s.Usage))
+	adminGroup.GET("/usage-logs/retention", adminUsageRetentionHandler(s.Usage))
+	adminGroup.PUT("/usage-logs/retention", updateUsageRetentionHandler(s.Usage))
+	adminGroup.DELETE("/usage-logs", deleteUsageLogsHandler(s.Usage))
 
 	api.POST("/payments/epay/notify", epayNotifyHandler(s.Payments))
 	api.GET("/payments/epay/notify", epayNotifyHandler(s.Payments))
@@ -372,8 +378,9 @@ func revokeAPIKeyHandler(svc *apikeys.Service) gin.HandlerFunc {
 
 func webGenerateHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		startedAt := time.Now()
 		if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
-			webMultipartGenerate(c, s)
+			webMultipartGenerate(c, s, startedAt)
 			return
 		}
 		var req struct {
@@ -383,6 +390,18 @@ func webGenerateHandler(s Services) gin.HandlerFunc {
 			Quality string `json:"quality"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
+			recordUsageFailure(c, s, usage.RecordInput{
+				UserID:      CurrentUserID(c),
+				Source:      "WEB",
+				Model:       req.Model,
+				Prompt:      req.Prompt,
+				Size:        req.Size,
+				Quality:     req.Quality,
+				Status:      "FAILED",
+				StatusCode:  intPtr(http.StatusBadRequest),
+				DurationMS:  durationPtr(startedAt),
+				ErrorMessage: stringPtr("invalid request body"),
+			})
 			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
 			return
 		}
@@ -394,9 +413,22 @@ func webGenerateHandler(s Services) gin.HandlerFunc {
 			Quality: req.Quality,
 		})
 		if err != nil {
+			recordUsageFailure(c, s, usage.RecordInput{
+				UserID:      CurrentUserID(c),
+				Source:      "WEB",
+				Model:       req.Model,
+				Prompt:      req.Prompt,
+				Size:        req.Size,
+				Quality:     req.Quality,
+				Status:      "FAILED",
+				StatusCode:  intPtr(generationErrorStatus(err)),
+				DurationMS:  durationPtr(startedAt),
+				ErrorMessage: stringPtr(err.Error()),
+			})
 			AbortGenerationError(c, err)
 			return
 		}
+		recordUsagePending(c, s, gen, "WEB")
 		if err := s.Queue.EnqueueGenerate(c.Request.Context(), gen.ID); err != nil {
 			_ = s.Images.CancelPending(c.Request.Context(), gen.ID, "image enqueue failed")
 			Abort(c, err)
@@ -406,8 +438,16 @@ func webGenerateHandler(s Services) gin.HandlerFunc {
 	}
 }
 
-func webMultipartGenerate(c *gin.Context, s Services) {
+func webMultipartGenerate(c *gin.Context, s Services, startedAt time.Time) {
 	if err := c.Request.ParseMultipartForm(64 << 20); err != nil {
+		recordUsageFailure(c, s, usage.RecordInput{
+			UserID:      CurrentUserID(c),
+			Source:      "WEB",
+			Status:      "FAILED",
+			StatusCode:  intPtr(http.StatusBadRequest),
+			DurationMS:  durationPtr(startedAt),
+			ErrorMessage: stringPtr("invalid multipart request"),
+		})
 		Abort(c, NewError(http.StatusBadRequest, "invalid multipart request", err))
 		return
 	}
@@ -421,17 +461,42 @@ func webMultipartGenerate(c *gin.Context, s Services) {
 		Quality: c.PostForm("quality"),
 	})
 	if err != nil {
+		recordUsageFailure(c, s, usage.RecordInput{
+			UserID:      CurrentUserID(c),
+			Source:      "WEB",
+			Model:       c.PostForm("model"),
+			Prompt:      c.PostForm("prompt"),
+			Size:        c.PostForm("size"),
+			Quality:     c.PostForm("quality"),
+			Status:      "FAILED",
+			StatusCode:  intPtr(generationErrorStatus(err)),
+			DurationMS:  durationPtr(startedAt),
+			ErrorMessage: stringPtr(err.Error()),
+		})
 		AbortGenerationError(c, err)
 		return
 	}
+	recordUsagePending(c, s, gen, "WEB")
 	if len(files) > 0 {
 		keys, err := s.Images.SaveReferenceFiles(c.Request.Context(), CurrentUserID(c), gen.ID, files)
 		if err != nil {
 			_ = s.Images.CancelPending(c.Request.Context(), gen.ID, err.Error())
+			if s.Usage != nil {
+				_ = s.Usage.CompleteByImageID(c.Request.Context(), usage.CompleteInput{
+					ImageGenerationID: gen.ID,
+					Status:            "FAILED",
+					Success:           false,
+					StatusCode:        intPtr(http.StatusBadRequest),
+					ErrorMessage:      stringPtr(err.Error()),
+				})
+			}
 			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
 			return
 		}
 		gen.ReferenceCount = len(keys)
+		if s.Usage != nil {
+			_ = s.Usage.SetReferenceCount(c.Request.Context(), gen.ID, len(keys))
+		}
 	}
 	if err := s.Queue.EnqueueGenerate(c.Request.Context(), gen.ID); err != nil {
 		_ = s.Images.CancelPending(c.Request.Context(), gen.ID, "image enqueue failed")
@@ -443,6 +508,7 @@ func webMultipartGenerate(c *gin.Context, s Services) {
 
 func developerGenerateHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		startedAt := time.Now()
 		var req struct {
 			Model   string `json:"model"`
 			Prompt  string `json:"prompt"`
@@ -450,6 +516,19 @@ func developerGenerateHandler(s Services) gin.HandlerFunc {
 			Quality string `json:"quality"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
+			recordUsageFailure(c, s, usage.RecordInput{
+				UserID:      CurrentUserID(c),
+				APIKeyID:    CurrentAPIKeyID(c),
+				Source:      "API",
+				Model:       req.Model,
+				Prompt:      req.Prompt,
+				Size:        req.Size,
+				Quality:     req.Quality,
+				Status:      "FAILED",
+				StatusCode:  intPtr(http.StatusBadRequest),
+				DurationMS:  durationPtr(startedAt),
+				ErrorMessage: stringPtr("invalid request body"),
+			})
 			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
 			return
 		}
@@ -462,9 +541,23 @@ func developerGenerateHandler(s Services) gin.HandlerFunc {
 			Quality:  req.Quality,
 		})
 		if err != nil {
+			recordUsageFailure(c, s, usage.RecordInput{
+				UserID:      CurrentUserID(c),
+				APIKeyID:    CurrentAPIKeyID(c),
+				Source:      "API",
+				Model:       req.Model,
+				Prompt:      req.Prompt,
+				Size:        req.Size,
+				Quality:     req.Quality,
+				Status:      "FAILED",
+				StatusCode:  intPtr(generationErrorStatus(err)),
+				DurationMS:  durationPtr(startedAt),
+				ErrorMessage: stringPtr(err.Error()),
+			})
 			AbortGenerationError(c, err)
 			return
 		}
+		recordUsagePending(c, s, gen, "API")
 		if err := s.Queue.EnqueueGenerate(c.Request.Context(), gen.ID); err != nil {
 			_ = s.Images.CancelPending(c.Request.Context(), gen.ID, "image enqueue failed")
 			Abort(c, err)
@@ -495,12 +588,98 @@ func developerGenerateHandler(s Services) gin.HandlerFunc {
 			}
 			select {
 			case <-ctx.Done():
+				if s.Usage != nil {
+					_ = s.Usage.CompleteByImageID(context.Background(), usage.CompleteInput{
+						ImageGenerationID: gen.ID,
+						Status:            "TIMEOUT",
+						Success:           false,
+						StatusCode:        intPtr(http.StatusGatewayTimeout),
+						ErrorMessage:      stringPtr("image generation timed out"),
+					})
+				}
 				Abort(c, NewError(http.StatusGatewayTimeout, "image generation timed out", ctx.Err()))
 				return
 			case <-ticker.C:
 			}
 		}
 	}
+}
+
+func recordUsagePending(c *gin.Context, s Services, gen images.Generation, source string) {
+	if s.Usage == nil {
+		return
+	}
+	imageID := gen.ID
+	_, _ = s.Usage.Record(c.Request.Context(), usage.RecordInput{
+		UserID:            gen.UserID,
+		APIKeyID:          gen.APIKeyID,
+		ImageGenerationID: &imageID,
+		Source:            source,
+		Method:            c.Request.Method,
+		Path:              usagePath(c),
+		IPAddress:         c.ClientIP(),
+		UserAgent:         c.Request.UserAgent(),
+		Model:             gen.Model,
+		Prompt:            gen.Prompt,
+		Size:              gen.Size,
+		Quality:           gen.Quality,
+		ReferenceCount:    gen.ReferenceCount,
+		CreditsCost:       gen.CreditsCost,
+		Status:            "PENDING",
+	})
+}
+
+func recordUsageFailure(c *gin.Context, s Services, input usage.RecordInput) {
+	if s.Usage == nil {
+		return
+	}
+	if input.Method == "" {
+		input.Method = c.Request.Method
+	}
+	if input.Path == "" {
+		input.Path = usagePath(c)
+	}
+	if input.IPAddress == "" {
+		input.IPAddress = c.ClientIP()
+	}
+	if input.UserAgent == "" {
+		input.UserAgent = c.Request.UserAgent()
+	}
+	input.Success = false
+	if input.Status == "" {
+		input.Status = "FAILED"
+	}
+	_, _ = s.Usage.Record(c.Request.Context(), input)
+}
+
+func usagePath(c *gin.Context) string {
+	if path := c.FullPath(); path != "" {
+		return path
+	}
+	return c.Request.URL.Path
+}
+
+func generationErrorStatus(err error) int {
+	if errors.Is(err, billing.ErrInsufficientCredits) {
+		return http.StatusPaymentRequired
+	}
+	return http.StatusBadRequest
+}
+
+func durationPtr(startedAt time.Time) *int64 {
+	value := time.Since(startedAt).Milliseconds()
+	if value < 0 {
+		value = 0
+	}
+	return &value
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func listImagesHandler(svc *images.Service) gin.HandlerFunc {
@@ -1030,6 +1209,95 @@ func adminStatsHandler(adminSvc *admin.Service) gin.HandlerFunc {
 	}
 }
 
+func adminUsageLogsHandler(usageSvc *usage.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		limit, offset := pagination(c)
+		filter := usage.ListFilter{
+			UserQuery:  c.Query("user"),
+			Success:    c.Query("success"),
+			Source:     c.Query("source"),
+			PromptLike: c.Query("prompt"),
+			Limit:      limit,
+			Offset:     offset,
+		}
+		if after, ok := parseQueryTime(c.Query("after")); ok {
+			filter.After = &after
+		}
+		if before, ok := parseQueryTime(c.Query("before")); ok {
+			filter.Before = &before
+		}
+		result, err := usageSvc.List(c.Request.Context(), filter)
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, result)
+	}
+}
+
+func adminUsageRetentionHandler(usageSvc *usage.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		settings, err := usageSvc.Retention(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func updateUsageRetentionHandler(usageSvc *usage.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Days int `json:"days"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		settings, err := usageSvc.SetRetention(c.Request.Context(), req.Days, CurrentUserID(c))
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func deleteUsageLogsHandler(usageSvc *usage.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Before *string `json:"before"`
+			Days   *int    `json:"days"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		var before time.Time
+		switch {
+		case req.Before != nil && strings.TrimSpace(*req.Before) != "":
+			parsed, ok := parseQueryTime(*req.Before)
+			if !ok {
+				Abort(c, NewError(http.StatusBadRequest, "before is invalid", nil))
+				return
+			}
+			before = parsed
+		case req.Days != nil && *req.Days > 0:
+			before = time.Now().AddDate(0, 0, -*req.Days)
+		default:
+			Abort(c, NewError(http.StatusBadRequest, "before or days is required", nil))
+			return
+		}
+		count, err := usageSvc.DeleteBefore(c.Request.Context(), before, 0)
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, gin.H{"count": count})
+	}
+}
+
 func pagination(c *gin.Context) (int32, int32) {
 	limit64, _ := strconv.ParseInt(c.DefaultQuery("limit", "50"), 10, 32)
 	offset64, _ := strconv.ParseInt(c.DefaultQuery("offset", "0"), 10, 32)
@@ -1040,6 +1308,20 @@ func pagination(c *gin.Context) (int32, int32) {
 		offset64 = 0
 	}
 	return int32(limit64), int32(offset64)
+}
+
+func parseQueryTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, true
+	}
+	if parsed, err := time.Parse("2006-01-02", value); err == nil {
+		return parsed, true
+	}
+	return time.Time{}, false
 }
 
 func AbortGenerationError(c *gin.Context, err error) {
