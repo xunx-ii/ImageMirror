@@ -6,6 +6,7 @@ import {
   Bell,
   Copy,
   CreditCard,
+  Eye,
   Gift,
   ImagePlus,
   Pencil,
@@ -43,6 +44,7 @@ import { useAuthStore } from "@/stores/auth"
 import type { AdminOverview, ContentAsset, EPaySettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
+type UsageDetailKind = "prompt" | "result"
 
 function qualityLabel(value: string) {
   switch (value) {
@@ -132,6 +134,8 @@ export function AdminPage() {
   const [usageDeleteBefore, setUsageDeleteBefore] = useState("")
   const [usageRetentionDialogOpen, setUsageRetentionDialogOpen] = useState(false)
   const [usageDeleteDialogOpen, setUsageDeleteDialogOpen] = useState(false)
+  const [usageDetailLog, setUsageDetailLog] = useState<UsageLog | null>(null)
+  const [usageDetailKind, setUsageDetailKind] = useState<UsageDetailKind>("prompt")
   const [usageLoading, setUsageLoading] = useState(false)
 
   const selectedCodeSet = useMemo(() => new Set(selectedCodes), [selectedCodes])
@@ -570,6 +574,15 @@ export function AdminPage() {
     })
   }
 
+  function openUsageDetail(log: UsageLog, kind: UsageDetailKind) {
+    setUsageDetailLog(log)
+    setUsageDetailKind(kind)
+  }
+
+  function closeUsageDetail() {
+    setUsageDetailLog(null)
+  }
+
   async function saveUsageRetention(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     try {
@@ -933,13 +946,21 @@ export function AdminPage() {
                       <TableCell className="tabular-nums">{formatDuration(log.durationMs)}</TableCell>
                       <TableCell className="tabular-nums">{log.creditsCost}</TableCell>
                       <TableCell>
-                        <div className="line-clamp-2 min-w-[260px] max-w-[420px] text-sm">{log.prompt || "-"}</div>
+                        {log.prompt ? (
+                          <Button type="button" variant="ghost" size="icon-xs" aria-label="查看提示词" title="查看提示词" onClick={() => openUsageDetail(log, "prompt")}>
+                            <Eye data-icon="inline-start" />
+                          </Button>
+                        ) : (
+                          "-"
+                        )}
                       </TableCell>
                       <TableCell>
-                        <div className="flex min-w-[160px] flex-col gap-1">
+                        <div className="flex min-w-[140px] items-center gap-2">
                           <Badge variant={log.success ? "secondary" : "destructive"}>{log.success ? "成功" : "失败"}</Badge>
                           <span className="text-xs text-muted-foreground">{log.statusCode ?? "-"} / {log.status}</span>
-                          {log.errorMessage && <span className="line-clamp-1 text-xs text-destructive">{log.errorMessage}</span>}
+                          <Button type="button" variant="ghost" size="icon-xs" aria-label="查看结果详情" title="查看结果详情" onClick={() => openUsageDetail(log, "result")}>
+                            <Eye data-icon="inline-start" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1396,6 +1417,65 @@ export function AdminPage() {
             <Button type="submit" variant="outline" form="usage-delete-form">
               <Trash2 data-icon="inline-start" />
               删除日志
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={usageDetailLog !== null} onOpenChange={(open) => (!open ? closeUsageDetail() : undefined)}>
+        <DialogContent className="max-h-[90svh] overflow-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{usageDetailKind === "prompt" ? "提示词详情" : "结果详情"}</DialogTitle>
+            <DialogDescription>
+              {usageDetailLog ? `${usageDetailLog.userEmail || "-"}，${formatDate(usageDetailLog.createdAt)}` : "查看用量日志详情"}
+            </DialogDescription>
+          </DialogHeader>
+          {usageDetailLog && usageDetailKind === "prompt" && (
+            <div className="whitespace-pre-wrap break-words rounded-lg border bg-muted/30 p-3 text-sm leading-6">
+              {usageDetailLog.prompt || "-"}
+            </div>
+          )}
+          {usageDetailLog && usageDetailKind === "result" && (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={usageDetailLog.success ? "secondary" : "destructive"}>{usageDetailLog.success ? "成功" : "失败"}</Badge>
+                <Badge variant="outline">{usageDetailLog.statusCode ?? "-"} / {usageDetailLog.status}</Badge>
+                <Badge variant="outline">{formatDuration(usageDetailLog.durationMs)}</Badge>
+                <Badge variant="outline">{usageDetailLog.creditsCost} 积分</Badge>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">调用记录</span>
+                  <span className="break-all text-sm">{usageDetailLog.method} {usageDetailLog.path}</span>
+                </div>
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">模型 / 尺寸 / 质量</span>
+                  <span className="break-words text-sm">
+                    {usageDetailLog.model || "-"} / {usageDetailLog.size || "-"} / {qualityLabel(usageDetailLog.quality)}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">IP / 来源</span>
+                  <span className="break-all text-sm">{usageDetailLog.ipAddress || "-"} / {usageDetailLog.source}</span>
+                </div>
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">参考图数量 / 完成时间</span>
+                  <span className="break-words text-sm">
+                    {usageDetailLog.referenceCount} / {formatDate(usageDetailLog.completedAt)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-sm font-medium">失败原因</span>
+                <div className="whitespace-pre-wrap break-words rounded-lg border bg-muted/30 p-3 text-sm leading-6">
+                  {usageDetailLog.errorMessage || "无"}
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeUsageDetail}>
+              关闭
             </Button>
           </DialogFooter>
         </DialogContent>
