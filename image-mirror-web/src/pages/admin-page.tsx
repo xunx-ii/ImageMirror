@@ -4,6 +4,7 @@ import {
   BadgeCent,
   Ban,
   Bell,
+  CircleAlert,
   Copy,
   CreditCard,
   Eye,
@@ -103,6 +104,7 @@ export function AdminPage() {
   const [openAIPriority, setOpenAIPriority] = useState(100)
   const [editingOpenAIEndpointId, setEditingOpenAIEndpointId] = useState<string | null>(null)
   const [openAIEndpointDialogOpen, setOpenAIEndpointDialogOpen] = useState(false)
+  const [openAIEndpointError, setOpenAIEndpointError] = useState<OpenAIEndpoint | null>(null)
   const [epayGateway, setEPayGateway] = useState("https://pay.example.com")
   const [epayPID, setEPayPID] = useState("")
   const [epayKey, setEPayKey] = useState("")
@@ -1278,10 +1280,16 @@ export function AdminPage() {
                       <TableCell className="tabular-nums">{endpoint.failureCount}</TableCell>
                       <TableCell>{endpoint.circuitOpenUntil ? formatDate(endpoint.circuitOpenUntil) : "-"}</TableCell>
                       <TableCell>
-                        <div className="flex min-w-[170px] flex-col gap-1 text-xs text-muted-foreground">
-                          <span>成功 {formatDate(endpoint.lastSuccessAt)}</span>
-                          <span>失败 {formatDate(endpoint.lastFailureAt)}</span>
-                          {endpoint.lastError && <span className="line-clamp-1 text-destructive">{endpoint.lastError}</span>}
+                        <div className="flex min-w-[170px] items-center gap-2 text-xs text-muted-foreground">
+                          <div className="flex flex-col gap-1">
+                            <span>成功 {formatDate(endpoint.lastSuccessAt)}</span>
+                            <span>失败 {formatDate(endpoint.lastFailureAt)}</span>
+                          </div>
+                          {endpoint.lastError && (
+                            <Button type="button" variant="destructive" size="icon-xs" aria-label="查看错误原因" title="查看错误原因" onClick={() => setOpenAIEndpointError(endpoint)}>
+                              <CircleAlert data-icon="inline-start" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -1575,6 +1583,48 @@ export function AdminPage() {
             <Button type="submit" form="redemption-code-form">
               <Gift data-icon="inline-start" />
               生成
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={openAIEndpointError !== null} onOpenChange={(open) => (!open ? setOpenAIEndpointError(null) : undefined)}>
+        <DialogContent className="max-h-[90svh] overflow-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>API 节点错误原因</DialogTitle>
+            <DialogDescription>{openAIEndpointError ? `${openAIEndpointError.name}，${openAIEndpointError.baseUrl}` : "查看 API 节点错误详情"}</DialogDescription>
+          </DialogHeader>
+          {openAIEndpointError && (
+            <div className="flex flex-col gap-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">最近失败</span>
+                  <span className="break-words text-sm">{formatDate(openAIEndpointError.lastFailureAt)}</span>
+                </div>
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">熔断到</span>
+                  <span className="break-words text-sm">{openAIEndpointError.circuitOpenUntil ? formatDate(openAIEndpointError.circuitOpenUntil) : "-"}</span>
+                </div>
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">失败次数</span>
+                  <span className="break-words text-sm">{openAIEndpointError.failureCount}</span>
+                </div>
+                <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-3">
+                  <span className="text-xs text-muted-foreground">优先级</span>
+                  <span className="break-words text-sm">{openAIEndpointError.priority}</span>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="text-sm font-medium">错误原因</span>
+                <div className="whitespace-pre-wrap break-words rounded-lg border bg-muted/30 p-3 text-sm leading-6">
+                  {openAIEndpointError.lastError || "-"}
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpenAIEndpointError(null)}>
+              关闭
             </Button>
           </DialogFooter>
         </DialogContent>

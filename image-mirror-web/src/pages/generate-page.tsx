@@ -36,6 +36,20 @@ type ReferencePreview = {
   url: string
 }
 
+type GenerateChatIndex = {
+  imageToChat: Record<string, string>
+  chats: Record<string, string[]>
+  updatedAt: Record<string, string>
+}
+
+type HistoryThread = {
+  id: string
+  images: ImageGeneration[]
+  latest: ImageGeneration
+}
+
+const chatIndexStorageKey = "image-mirror.generate.chat-index"
+
 function createReferenceId(file: File) {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID()
   return `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`
@@ -51,11 +65,105 @@ function parseDimensionInput(value: string) {
   return Math.floor(next)
 }
 
+function emptyChatIndex(): GenerateChatIndex {
+  return { imageToChat: {}, chats: {}, updatedAt: {} }
+}
+
+function readStoredChatIndex(): GenerateChatIndex {
+  if (typeof window === "undefined") return emptyChatIndex()
+  try {
+    const raw = window.localStorage.getItem(chatIndexStorageKey)
+    if (!raw) return emptyChatIndex()
+    const parsed = JSON.parse(raw) as Partial<GenerateChatIndex>
+    return {
+      imageToChat: parsed.imageToChat ?? {},
+      chats: parsed.chats ?? {},
+      updatedAt: parsed.updatedAt ?? {},
+    }
+  } catch {
+    return emptyChatIndex()
+  }
+}
+
+function writeStoredChatIndex(index: GenerateChatIndex) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(chatIndexStorageKey, JSON.stringify(index))
+  } catch {
+    // Ignore quota or privacy-mode failures; the chat still works for this page session.
+  }
+}
+
+function upsertChatImages(index: GenerateChatIndex, chatId: string, imageIds: string[]) {
+  const imageToChat = { ...index.imageToChat }
+  const chats = Object.fromEntries(Object.entries(index.chats).map(([id, ids]) => [id, [...ids]]))
+  const nextIds = chats[chatId] ? [...chats[chatId]] : []
+
+  imageIds.forEach((imageId) => {
+    const previousChatId = imageToChat[imageId]
+    if (previousChatId && previousChatId !== chatId) {
+      chats[previousChatId] = (chats[previousChatId] ?? []).filter((id) => id !== imageId)
+    }
+    imageToChat[imageId] = chatId
+    if (!nextIds.includes(imageId)) nextIds.push(imageId)
+  })
+
+  return {
+    imageToChat,
+    chats: { ...chats, [chatId]: nextIds },
+    updatedAt: { ...index.updatedAt, [chatId]: new Date().toISOString() },
+  }
+}
+
+function createdAtTime(image: ImageGeneration) {
+  return new Date(image.createdAt).getTime()
+}
+
+function orderImagesForChat(chatId: string, images: ImageGeneration[], index: GenerateChatIndex) {
+  const byId = new Map(images.map((image) => [image.id, image]))
+  const storedIds = index.chats[chatId] ?? []
+  if (storedIds.length === 0) return [...images].sort((a, b) => createdAtTime(a) - createdAtTime(b))
+  const ordered = storedIds.map((id) => byId.get(id)).filter((image): image is ImageGeneration => Boolean(image))
+  const orderedIds = new Set(ordered.map((image) => image.id))
+  const leftovers = images.filter((image) => !orderedIds.has(image.id)).sort((a, b) => createdAtTime(a) - createdAtTime(b))
+  return [...ordered, ...leftovers]
+}
+
+function parseImageSize(value: string) {
+  const [widthValue, heightValue] = value.split("x")
+  const nextWidth = parseDimensionInput(widthValue ?? "")
+  const nextHeight = parseDimensionInput(heightValue ?? "")
+  if (nextWidth == null || nextHeight == null) return null
+  return { width: nextWidth, height: nextHeight }
+}
+
+function generationBusy(image?: ImageGeneration | null) {
+  return image?.status === "PENDING" || image?.status === "PROCESSING"
+}
+
+function statusLabel(value: ImageGeneration["status"]) {
+  switch (value) {
+    case "PENDING":
+      return "排队中"
+    case "PROCESSING":
+      return "生成中"
+    case "COMPLETED":
+      return "已完成"
+    case "FAILED":
+      return "失败"
+    case "EXPIRED":
+      return "已过期"
+    default:
+      return value
+  }
+}
+
 export function GeneratePage() {
   const refreshMe = useAuthStore((state) => state.refreshMe)
   const referenceUrlRef = useRef<Set<string>>(new Set())
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const activeImagesRef = useRef<ImageGeneration[]>([])
   const [prompt, setPrompt] = useState("")
   const [width, setWidth] = useState(1024)
   const [height, setHeight] = useState(1024)
@@ -65,7 +173,9 @@ export function GeneratePage() {
   const [quality, setQuality] = useState("medium")
   const [pricing, setPricing] = useState<PricingRule[]>([])
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
-  const [current, setCurrent] = useState<ImageGeneration | null>(null)
+  const [chatIndex, setChatIndex] = useState<GenerateChatIndex>(() => readStoredChatIndex())
+  const [activeChatId, setActiveChatId] = useState<string | null>(null)
+  const [activeImages, setActiveImages] = useState<ImageGeneration[]>([])
   const [history, setHistory] = useState<ImageGeneration[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -89,6 +199,10 @@ export function GeneratePage() {
       urls.clear()
     }
   }, [])
+
+  useEffect(() => {
+    activeImagesRef.current = activeImages
+  }, [activeImages])
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true)
@@ -136,8 +250,26 @@ export function GeneratePage() {
   const maxEdge = platform.allow4k ? 3840 : 2048
   const maxHeight = maxEdge
   const sizeDraftChanged = widthInput !== String(width) || heightInput !== String(height)
+  const current = activeImages.length > 0 ? activeImages[activeImages.length - 1] : null
   const currentId = current?.id
   const currentStatus = current?.status
+  const busy = activeImages.some((image) => generationBusy(image))
+  const historyThreads = useMemo<HistoryThread[]>(() => {
+    const groups = new Map<string, ImageGeneration[]>()
+    history.forEach((image) => {
+      const chatId = chatIndex.imageToChat[image.id] ?? image.id
+      groups.set(chatId, [...(groups.get(chatId) ?? []), image])
+    })
+
+    return Array.from(groups.entries())
+      .map(([id, images]) => {
+        const ordered = orderImagesForChat(id, images, chatIndex)
+        const latest = ordered.reduce((next, image) => (createdAtTime(image) > createdAtTime(next) ? image : next), ordered[0])
+        return { id, images: ordered, latest }
+      })
+      .filter((thread): thread is HistoryThread => Boolean(thread.latest))
+      .sort((a, b) => createdAtTime(b.latest) - createdAtTime(a.latest))
+  }, [chatIndex, history])
 
   function confirmDimensions(showToast = false) {
     const nextWidth = parseDimensionInput(widthInput)
@@ -162,12 +294,27 @@ export function GeneratePage() {
     return { width: nextWidth, height: nextHeight }
   }
 
+  function rememberChatImages(chatId: string, images: ImageGeneration[]) {
+    setChatIndex((state) => {
+      const next = upsertChatImages(state, chatId, images.map((image) => image.id))
+      writeStoredChatIndex(next)
+      return next
+    })
+    setHistory((state) => {
+      const byId = new Map(state.map((item) => [item.id, item]))
+      images.forEach((image) => byId.set(image.id, image))
+      return Array.from(byId.values()).sort((a, b) => createdAtTime(b) - createdAtTime(a))
+    })
+  }
+
   useEffect(() => {
-    if (!currentId || currentStatus === "COMPLETED" || currentStatus === "FAILED" || currentStatus === "EXPIRED") return
+    if (!currentId || currentStatus === "COMPLETED" || currentStatus === "FAILED" || currentStatus === "EXPIRED" || !activeChatId) return
     const timer = window.setInterval(async () => {
       try {
         const { data } = await api.get<{ image: ImageGeneration }>(`/api/images/${currentId}/status`)
-        setCurrent(data.image)
+        const nextImages = activeImagesRef.current.map((image) => (image.id === data.image.id ? data.image : image))
+        setActiveImages(nextImages)
+        rememberChatImages(activeChatId, nextImages)
         if (data.image.status === "COMPLETED") {
           toast.success("图片已生成")
           void refreshMe()
@@ -185,7 +332,7 @@ export function GeneratePage() {
       }
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [currentId, currentStatus, loadHistory, refreshMe])
+  }, [activeChatId, currentId, currentStatus, loadHistory, refreshMe])
 
   useEffect(() => {
     if (!currentId) return
@@ -213,7 +360,12 @@ export function GeneratePage() {
       form.append("quality", quality)
       referenceImages.forEach((image) => form.append("referenceImages", image.file))
       const { data } = await api.post<{ image: ImageGeneration }>("/api/images/generate", form)
-      setCurrent(data.image)
+      const chatId = activeChatId ?? data.image.id
+      const nextImages = [...activeImages, data.image]
+      setActiveChatId(chatId)
+      setActiveImages(nextImages)
+      rememberChatImages(chatId, nextImages)
+      setPrompt("")
       clearReferenceImages()
       setFileInputKey((value) => value + 1)
       toast.success("任务已提交")
@@ -267,19 +419,31 @@ export function GeneratePage() {
   }
 
   function startNewChat() {
-    setCurrent(null)
+    setActiveChatId(null)
+    setActiveImages([])
     setPrompt("")
     clearReferenceImages()
     setFileInputKey((value) => value + 1)
   }
 
-  function openHistoryItem(image: ImageGeneration) {
-    setCurrent(image)
-    setPrompt(image.prompt)
+  function openHistoryThread(thread: HistoryThread) {
+    const images = orderImagesForChat(thread.id, thread.images, chatIndex)
+    setActiveChatId(thread.id)
+    setActiveImages(images)
+    rememberChatImages(thread.id, images)
+    setPrompt("")
     clearReferenceImages()
+    const latestSize = parseImageSize(thread.latest.size)
+    if (latestSize) {
+      setWidth(latestSize.width)
+      setHeight(latestSize.height)
+      setWidthInput(String(latestSize.width))
+      setHeightInput(String(latestSize.height))
+      setSizeDraftError(null)
+    }
+    setQuality(thread.latest.quality)
+    window.requestAnimationFrame(() => scrollMessagesToBottom("auto"))
   }
-
-  const busy = current?.status === "PENDING" || current?.status === "PROCESSING"
 
   return (
     <>
@@ -298,24 +462,27 @@ export function GeneratePage() {
           <div className="min-h-0 flex-1 overflow-auto p-2">
             {historyLoading ? (
               <div className="px-2 py-3 text-sm text-muted-foreground">加载中</div>
-            ) : history.length === 0 ? (
+            ) : historyThreads.length === 0 ? (
               <div className="px-2 py-3 text-sm text-muted-foreground">暂无历史</div>
             ) : (
               <div className="flex flex-col gap-1">
-                {history.map((image) => (
+                {historyThreads.map((thread) => (
                   <button
-                    key={image.id}
+                    key={thread.id}
                     type="button"
                     className={cn(
                       "flex min-h-16 flex-col gap-1 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted",
-                      current?.id === image.id && "bg-muted"
+                      activeChatId === thread.id && "bg-muted"
                     )}
-                    onClick={() => openHistoryItem(image)}
+                    onClick={() => openHistoryThread(thread)}
                   >
-                    <span className="line-clamp-2 leading-5">{image.prompt}</span>
+                    <span className="line-clamp-2 leading-5">{thread.latest.prompt}</span>
                     <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                      <span>{formatDate(image.createdAt)}</span>
-                      <Badge variant={image.status === "COMPLETED" ? "secondary" : "outline"}>{image.status}</Badge>
+                      <span>{formatDate(thread.latest.createdAt)}</span>
+                      <span className="flex items-center gap-1">
+                        {thread.images.length > 1 && <Badge variant="outline">{thread.images.length}</Badge>}
+                        <Badge variant={thread.latest.status === "COMPLETED" ? "secondary" : "outline"}>{statusLabel(thread.latest.status)}</Badge>
+                      </span>
                     </span>
                   </button>
                 ))}
@@ -337,7 +504,7 @@ export function GeneratePage() {
           </div>
 
           <div ref={messageScrollRef} className="min-h-0 flex-1 overflow-auto bg-muted/10 p-4 md:p-6">
-            {!current ? (
+            {activeImages.length === 0 ? (
               <Empty className="min-h-full">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
@@ -349,55 +516,64 @@ export function GeneratePage() {
               </Empty>
             ) : (
               <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
-                <div className="flex justify-end">
-                  <div className="max-w-[78%] rounded-lg bg-primary px-4 py-3 text-sm text-primary-foreground">
-                    <div className="whitespace-pre-wrap leading-6">{current.prompt}</div>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      <Badge variant="secondary">{current.size}</Badge>
-                      <Badge variant="secondary">{qualityLabel(current.quality)}</Badge>
-                      {current.referenceCount > 0 && <Badge variant="secondary">参考图 {current.referenceCount}</Badge>}
+                {activeImages.map((image) => (
+                  <div key={image.id} className="flex flex-col gap-5">
+                    <div className="flex justify-end">
+                      <div className="max-w-[78%] rounded-lg bg-primary px-4 py-3 text-sm text-primary-foreground">
+                        <div className="whitespace-pre-wrap leading-6">{image.prompt}</div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <Badge variant="secondary">{image.size}</Badge>
+                          <Badge variant="secondary">{qualityLabel(image.quality)}</Badge>
+                          {image.referenceCount > 0 && <Badge variant="secondary">参考图 {image.referenceCount}</Badge>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex justify-start">
+                      <div className="flex w-full max-w-[82%] flex-col gap-3 rounded-lg border bg-background p-3 shadow-sm">
+                        {generationBusy(image) ? (
+                          <div className="flex min-h-[220px] flex-col justify-center gap-4 p-3">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              <RefreshCw className="animate-spin" />
+                              {image.status === "PROCESSING" ? "正在生成图片" : "正在排队"}
+                            </div>
+                            <Progress value={image.status === "PROCESSING" ? 66 : 30} />
+                            <div className="text-xs text-muted-foreground">任务 ID {image.id}</div>
+                          </div>
+                        ) : image.status === "COMPLETED" ? (
+                          <>
+                            <button
+                              type="button"
+                              className="group flex max-h-[52vh] w-full items-center justify-center overflow-hidden rounded-lg bg-muted/30 outline-none transition-all duration-150 hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 active:scale-[0.99]"
+                              aria-label="查看大图"
+                              onClick={() => setViewer(image)}
+                            >
+                              <SecureImage
+                                imageId={image.id}
+                                alt={image.prompt}
+                                className="max-h-[52vh] w-full object-contain transition-transform duration-200 group-hover:scale-[1.01]"
+                                onLoad={() => scrollMessagesToBottom()}
+                              />
+                            </button>
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+                              <span>过期倒计时 {expiresIn(image.expiresAt)}</span>
+                              <Button variant="outline" size="sm" onClick={() => void downloadImage(image.id)}>
+                                <Download data-icon="inline-start" />
+                                下载
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">{image.errorMessage ?? "任务未完成"}</div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="flex justify-start">
-                  <div className="flex w-full max-w-[82%] flex-col gap-3 rounded-lg border bg-background p-3 shadow-sm">
-                    {busy ? (
-                      <div className="flex min-h-[260px] flex-col justify-center gap-4 p-3">
-                        <div className="flex items-center gap-2 text-sm font-medium">
-                          <RefreshCw className="animate-spin" />
-                          {current.status === "PROCESSING" ? "正在生成图片" : "正在排队"}
-                        </div>
-                        <Progress value={current.status === "PROCESSING" ? 66 : 30} />
-                        <div className="text-xs text-muted-foreground">任务 ID {current.id}</div>
-                      </div>
-                    ) : current.status === "COMPLETED" ? (
-                      <>
-                        <button
-                          type="button"
-                          className="group flex max-h-[52vh] w-full items-center justify-center overflow-hidden rounded-lg bg-muted/30 outline-none transition-all duration-150 hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 active:scale-[0.99]"
-                          aria-label="查看大图"
-                          onClick={() => setViewer(current)}
-                        >
-                          <SecureImage
-                            imageId={current.id}
-                            alt={current.prompt}
-                            className="max-h-[52vh] w-full object-contain transition-transform duration-200 group-hover:scale-[1.01]"
-                            onLoad={() => scrollMessagesToBottom()}
-                          />
-                        </button>
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
-                          <span>过期倒计时 {expiresIn(current.expiresAt)}</span>
-                          <Button variant="outline" size="sm" onClick={() => void downloadImage(current.id)}>
-                            <Download data-icon="inline-start" />
-                            下载
-                          </Button>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">{current.errorMessage ?? "任务未完成"}</div>
-                    )}
+                ))}
+                {busy && (
+                  <div className="flex justify-start">
+                    <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">当前会话有任务正在生成，完成后可以继续发送。</div>
                   </div>
-                </div>
+                )}
               </div>
             )}
           </div>
