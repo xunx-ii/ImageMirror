@@ -81,9 +81,10 @@ func NewRouter(s Services) *gin.Engine {
 	protected.GET("/billing/redemptions", redemptionHistoryHandler(s.Redemptions))
 	protected.GET("/checkin/status", checkinStatusHandler(s.Checkins))
 	protected.POST("/checkin", checkinHandler(s.Checkins, s.Users))
-	protected.GET("/api-keys", listAPIKeysHandler(s.APIKeys))
-	protected.POST("/api-keys", createAPIKeyHandler(s.APIKeys))
-	protected.DELETE("/api-keys/:id", revokeAPIKeyHandler(s.APIKeys))
+	apiKeysGroup := protected.Group("/api-keys", FeatureEnabled(s.ConfigStore.APIKeysEnabled, "API Key 功能已关闭"))
+	apiKeysGroup.GET("", listAPIKeysHandler(s.APIKeys))
+	apiKeysGroup.POST("", createAPIKeyHandler(s.APIKeys))
+	apiKeysGroup.DELETE("/:id", revokeAPIKeyHandler(s.APIKeys))
 	protected.POST("/images/generate", webGenerateHandler(s))
 	protected.GET("/images", listImagesHandler(s.Images))
 	protected.GET("/images/:id", getImageHandler(s.Images))
@@ -133,7 +134,7 @@ func NewRouter(s Services) *gin.Engine {
 	api.GET("/payments/epay/notify", epayNotifyHandler(s.Payments))
 
 	v1 := r.Group("/v1")
-	v1.Use(APIKeyAuth(s.APIKeys.Lookup), RateLimit(s.Redis, s.Config.RateLimitPerMinute))
+	v1.Use(FeatureEnabled(s.ConfigStore.APIKeysEnabled, "API Key 功能已关闭"), APIKeyAuth(s.APIKeys.Lookup), RateLimit(s.Redis, s.Config.RateLimitPerMinute))
 	v1.GET("/models", func(c *gin.Context) {
 		OK(c, gin.H{"object": "list", "data": []gin.H{{"id": s.Config.DefaultImageModel, "object": "model"}}})
 	})
@@ -1037,6 +1038,8 @@ func updatePlatformConfigHandler(s Services) gin.HandlerFunc {
 			Allow4K             *bool   `json:"allow4k"`
 			SiteTitle           *string `json:"siteTitle"`
 			SiteSubtitle        *string `json:"siteSubtitle"`
+			LoadingText         *string `json:"loadingText"`
+			APIKeysEnabled      *bool   `json:"apiKeysEnabled"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
@@ -1050,7 +1053,7 @@ func updatePlatformConfigHandler(s Services) gin.HandlerFunc {
 				bucket = "2k"
 			}
 		}
-		settings, err := s.ConfigStore.UpdatePlatform(c.Request.Context(), bucket, req.SiteTitle, req.SiteSubtitle, CurrentUserID(c))
+		settings, err := s.ConfigStore.UpdatePlatform(c.Request.Context(), bucket, req.SiteTitle, req.SiteSubtitle, req.LoadingText, req.APIKeysEnabled, CurrentUserID(c))
 		if err != nil {
 			Abort(c, err)
 			return

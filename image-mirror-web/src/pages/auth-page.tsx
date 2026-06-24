@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { renderMarkdown } from "@/lib/markdown"
-import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle } from "@/lib/platform"
+import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle, platformLoadingTitle } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
 import type { PlatformSettings, SiteContent, TokenPair, User } from "@/types"
 
@@ -68,7 +68,7 @@ export function AuthPage({ mode }: AuthPageProps) {
 
   useEffect(() => {
     let active = true
-    document.title = platformDocumentTitle(defaultPlatformSettings)
+    document.title = platformLoadingTitle(defaultPlatformSettings)
     api
       .get<PlatformSettings>("/api/settings/platform")
       .then((response) => {

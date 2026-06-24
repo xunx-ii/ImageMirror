@@ -156,6 +156,8 @@ export type PlatformSettings = {
   allow4k: boolean
   siteTitle: string
   siteSubtitle: string
+  loadingText: string
+  apiKeysEnabled: boolean
 }
 
 export type GenerationSettings = {

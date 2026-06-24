@@ -4,7 +4,31 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>image-mirror-web</title>
+    <title>IM AI图像生成平台</title>
+    <script>
+      ;(() => {
+        const fallbackTitle = "IM AI图像生成平台"
+        const applyTitle = (settings) => {
+          if (!settings || typeof settings !== "object") {
+            document.title = fallbackTitle
+            return
+          }
+          const loadingText = typeof settings.loadingText === "string" ? settings.loadingText.trim() : ""
+          const siteTitle = typeof settings.siteTitle === "string" && settings.siteTitle.trim() ? settings.siteTitle.trim() : "IM"
+          const siteSubtitle = typeof settings.siteSubtitle === "string" ? settings.siteSubtitle.trim() : ""
+          document.title = loadingText || (siteSubtitle ? `${siteTitle} ${siteSubtitle}` : siteTitle)
+        }
+        fetch("/api/settings/platform", {
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+        })
+          .then((response) => (response.ok ? response.json() : undefined))
+          .then(applyTitle)
+          .catch(() => {
+            document.title = fallbackTitle
+          })
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

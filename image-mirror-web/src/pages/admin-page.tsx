@@ -125,6 +125,8 @@ export function AdminPage() {
   const [privacyActive, setPrivacyActive] = useState(true)
   const [siteTitle, setSiteTitle] = useState(defaultPlatformSettings.siteTitle)
   const [siteSubtitle, setSiteSubtitle] = useState(defaultPlatformSettings.siteSubtitle)
+  const [loadingText, setLoadingText] = useState(defaultPlatformSettings.loadingText)
+  const [apiKeysEnabled, setAPIKeysEnabled] = useState(defaultPlatformSettings.apiKeysEnabled)
   const [imageGenerationConcurrency, setImageGenerationConcurrency] = useState(10)
   const [checkinEnabled, setCheckinEnabled] = useState(false)
   const [checkinCredits, setCheckinCredits] = useState(5)
@@ -234,6 +236,8 @@ export function AdminPage() {
       setPlatform(nextPlatform)
       setSiteTitle(nextPlatform.siteTitle)
       setSiteSubtitle(nextPlatform.siteSubtitle)
+      setLoadingText(nextPlatform.loadingText)
+      setAPIKeysEnabled(nextPlatform.apiKeysEnabled)
       setSize((value) => (!nextPlatform.allow4k && value === "4k" ? "2k" : value))
       setGenerationSettings(generationResponse.data)
       setImageGenerationConcurrency(generationResponse.data.imageGenerationConcurrency || 10)
@@ -353,6 +357,8 @@ export function AdminPage() {
       setPlatform(nextPlatform)
       setSiteTitle(nextPlatform.siteTitle)
       setSiteSubtitle(nextPlatform.siteSubtitle)
+      setLoadingText(nextPlatform.loadingText)
+      setAPIKeysEnabled(nextPlatform.apiKeysEnabled)
       if (!nextPlatform.allow4k && size === "4k") {
         setSize("2k")
         setEditingPricingId(null)
@@ -476,11 +482,15 @@ export function AdminPage() {
         maxResolutionBucket: platform.maxResolutionBucket,
         siteTitle,
         siteSubtitle,
+        loadingText,
+        apiKeysEnabled,
       })
       const nextPlatform = mergePlatformSettings(data)
       setPlatform(nextPlatform)
       setSiteTitle(nextPlatform.siteTitle)
       setSiteSubtitle(nextPlatform.siteSubtitle)
+      setLoadingText(nextPlatform.loadingText)
+      setAPIKeysEnabled(nextPlatform.apiKeysEnabled)
       emitPlatformSettingsUpdated(nextPlatform)
       toast.success("平台信息已保存")
     } catch (error) {
@@ -852,7 +862,7 @@ export function AdminPage() {
               <CardTitle>平台信息</CardTitle>
             </CardHeader>
             <CardContent>
-              <form className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]" onSubmit={savePlatform}>
+              <form className="grid gap-4 lg:grid-cols-2" onSubmit={savePlatform}>
                 <Field>
                   <FieldLabel htmlFor="site-title">标题</FieldLabel>
                   <Input id="site-title" value={siteTitle} onChange={(event) => setSiteTitle(event.target.value)} />
@@ -861,7 +871,17 @@ export function AdminPage() {
                   <FieldLabel htmlFor="site-subtitle">副标题</FieldLabel>
                   <Input id="site-subtitle" value={siteSubtitle} onChange={(event) => setSiteSubtitle(event.target.value)} />
                 </Field>
-                <div className="flex items-end">
+                <Field>
+                  <FieldLabel htmlFor="loading-text">加载文案</FieldLabel>
+                  <Input id="loading-text" value={loadingText} onChange={(event) => setLoadingText(event.target.value)} />
+                </Field>
+                <Field orientation="horizontal" className="self-end rounded-lg border p-3">
+                  <Checkbox id="api-keys-enabled" checked={apiKeysEnabled} onCheckedChange={(checked) => setAPIKeysEnabled(checked)} />
+                  <FieldContent>
+                    <FieldLabel htmlFor="api-keys-enabled">启用 API Key</FieldLabel>
+                  </FieldContent>
+                </Field>
+                <div className="flex lg:col-span-2">
                   <Button type="submit" className="w-full lg:w-auto">
                     <Save data-icon="inline-start" />
                     保存

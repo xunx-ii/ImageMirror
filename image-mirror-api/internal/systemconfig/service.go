@@ -12,17 +12,19 @@ import (
 )
 
 const (
-	KeyOpenAIAPIKey  = "openai_api_key"
-	KeyOpenAIBaseURL = "openai_base_url"
-	KeyEPayGateway   = "epay_gateway"
-	KeyEPayPID       = "epay_pid"
-	KeyEPayKey       = "epay_key"
-	KeyEPayName      = "epay_name"
-	KeyEPayRate      = "epay_credits_per_yuan"
-	KeyEPayEnabled   = "epay_enabled"
-	KeyMaxResolution = "max_resolution_bucket"
-	KeySiteTitle     = "site_title"
-	KeySiteSubtitle  = "site_subtitle"
+	KeyOpenAIAPIKey   = "openai_api_key"
+	KeyOpenAIBaseURL  = "openai_base_url"
+	KeyEPayGateway    = "epay_gateway"
+	KeyEPayPID        = "epay_pid"
+	KeyEPayKey        = "epay_key"
+	KeyEPayName       = "epay_name"
+	KeyEPayRate       = "epay_credits_per_yuan"
+	KeyEPayEnabled    = "epay_enabled"
+	KeyMaxResolution  = "max_resolution_bucket"
+	KeySiteTitle      = "site_title"
+	KeySiteSubtitle   = "site_subtitle"
+	KeyLoadingText    = "loading_text"
+	KeyAPIKeysEnabled = "api_keys_enabled"
 
 	KeyImageGenerationConcurrency = "image_generation_concurrency"
 	KeyDailyCheckinEnabled        = "daily_checkin_enabled"
@@ -57,6 +59,8 @@ type PlatformSettings struct {
 	Allow4K             bool   `json:"allow4k"`
 	SiteTitle           string `json:"siteTitle"`
 	SiteSubtitle        string `json:"siteSubtitle"`
+	LoadingText         string `json:"loadingText"`
+	APIKeysEnabled      bool   `json:"apiKeysEnabled"`
 }
 
 type GenerationSettings struct {
@@ -89,10 +93,18 @@ func (s *Service) PublicPlatform(ctx context.Context) (PlatformSettings, error) 
 	if err != nil {
 		return PlatformSettings{}, err
 	}
-	return normalizePlatform(bucket, title, subtitle), nil
+	loadingText, err := s.value(ctx, KeyLoadingText)
+	if err != nil {
+		return PlatformSettings{}, err
+	}
+	apiKeysEnabled, err := s.value(ctx, KeyAPIKeysEnabled)
+	if err != nil {
+		return PlatformSettings{}, err
+	}
+	return normalizePlatform(bucket, title, subtitle, loadingText, apiKeysEnabled), nil
 }
 
-func (s *Service) UpdatePlatform(ctx context.Context, maxResolutionBucket string, siteTitle *string, siteSubtitle *string, updatedBy string) (PlatformSettings, error) {
+func (s *Service) UpdatePlatform(ctx context.Context, maxResolutionBucket string, siteTitle *string, siteSubtitle *string, loadingText *string, apiKeysEnabled *bool, updatedBy string) (PlatformSettings, error) {
 	current, err := s.PublicPlatform(ctx)
 	if err != nil {
 		return PlatformSettings{}, err
@@ -108,11 +120,21 @@ func (s *Service) UpdatePlatform(ctx context.Context, maxResolutionBucket string
 	if siteSubtitle != nil {
 		subtitle = *siteSubtitle
 	}
-	settings := normalizePlatform(maxResolutionBucket, title, subtitle)
+	nextLoadingText := current.LoadingText
+	if loadingText != nil {
+		nextLoadingText = *loadingText
+	}
+	nextAPIKeysEnabled := current.APIKeysEnabled
+	if apiKeysEnabled != nil {
+		nextAPIKeysEnabled = *apiKeysEnabled
+	}
+	settings := normalizePlatform(maxResolutionBucket, title, subtitle, nextLoadingText, strconv.FormatBool(nextAPIKeysEnabled))
 	values := map[string]string{
-		KeyMaxResolution: settings.MaxResolutionBucket,
-		KeySiteTitle:     settings.SiteTitle,
-		KeySiteSubtitle:  settings.SiteSubtitle,
+		KeyMaxResolution:  settings.MaxResolutionBucket,
+		KeySiteTitle:      settings.SiteTitle,
+		KeySiteSubtitle:   settings.SiteSubtitle,
+		KeyLoadingText:    settings.LoadingText,
+		KeyAPIKeysEnabled: strconv.FormatBool(settings.APIKeysEnabled),
 	}
 	for key, value := range values {
 		if err := s.upsert(ctx, key, value, updatedBy); err != nil {
@@ -120,6 +142,14 @@ func (s *Service) UpdatePlatform(ctx context.Context, maxResolutionBucket string
 		}
 	}
 	return settings, nil
+}
+
+func (s *Service) APIKeysEnabled(ctx context.Context) (bool, error) {
+	value, err := s.value(ctx, KeyAPIKeysEnabled)
+	if err != nil {
+		return false, err
+	}
+	return !strings.EqualFold(strings.TrimSpace(value), "false"), nil
 }
 
 func (s *Service) MaxResolutionBucket(ctx context.Context) (string, error) {
@@ -405,7 +435,7 @@ func normalizeDailyCheckinCredits(value int64) int64 {
 	return value
 }
 
-func normalizePlatform(maxResolutionBucket string, siteTitle string, siteSubtitle string) PlatformSettings {
+func normalizePlatform(maxResolutionBucket string, siteTitle string, siteSubtitle string, loadingText string, apiKeysEnabled string) PlatformSettings {
 	bucket := strings.ToLower(strings.TrimSpace(maxResolutionBucket))
 	if bucket != "2k" {
 		bucket = "4k"
@@ -418,10 +448,16 @@ func normalizePlatform(maxResolutionBucket string, siteTitle string, siteSubtitl
 	if subtitle == "" {
 		subtitle = "AI图像生成平台"
 	}
+	nextLoadingText := strings.TrimSpace(loadingText)
+	if nextLoadingText == "" {
+		nextLoadingText = "IM AI图像生成平台"
+	}
 	return PlatformSettings{
 		MaxResolutionBucket: bucket,
 		Allow4K:             bucket == "4k",
 		SiteTitle:           title,
 		SiteSubtitle:        subtitle,
+		LoadingText:         nextLoadingText,
+		APIKeysEnabled:      !strings.EqualFold(strings.TrimSpace(apiKeysEnabled), "false"),
 	}
 }

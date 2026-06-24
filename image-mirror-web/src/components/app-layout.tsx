@@ -9,7 +9,7 @@ import {
   LogOut,
   Shield,
 } from "lucide-react"
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
@@ -20,7 +20,7 @@ import { Separator } from "@/components/ui/separator"
 import { checkinSettingsUpdatedEvent } from "@/lib/checkin"
 import { siteContentUpdatedEvent } from "@/lib/content"
 import { renderMarkdown } from "@/lib/markdown"
-import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle, platformSettingsUpdatedEvent } from "@/lib/platform"
+import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle, platformLoadingTitle, platformSettingsUpdatedEvent } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
 import type { CheckinResult, CheckinSettings, CheckinStatus, PlatformSettings, SiteContent } from "@/types"
 
@@ -45,6 +45,7 @@ export function AppLayout() {
   const [announcementOpen, setAnnouncementOpen] = useState(false)
   const [docsVisible, setDocsVisible] = useState(false)
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
+  const [platformLoaded, setPlatformLoaded] = useState(false)
   const [checkinStatus, setCheckinStatus] = useState<CheckinStatus | null>(null)
   const [checkinLoading, setCheckinLoading] = useState(false)
 
@@ -63,16 +64,18 @@ export function AppLayout() {
       applySettings((event as CustomEvent<PlatformSettings>).detail)
     }
 
-    document.title = platformDocumentTitle(defaultPlatformSettings)
+    document.title = platformLoadingTitle(defaultPlatformSettings)
     window.addEventListener(platformSettingsUpdatedEvent, handleSettingsUpdated)
     api
       .get<PlatformSettings>("/api/settings/platform")
       .then((response) => {
         if (!active) return
         applySettings(response.data)
+        setPlatformLoaded(true)
       })
       .catch(() => {
         document.title = platformDocumentTitle(defaultPlatformSettings)
+        setPlatformLoaded(true)
       })
     return () => {
       active = false
@@ -197,6 +200,14 @@ export function AppLayout() {
     }
   }
 
+  const visibleLinks = links.filter((item) => {
+    if (item.to === "/docs") return docsVisible
+    if (item.to === "/api-keys") return platformLoaded && platform.apiKeysEnabled
+    return true
+  })
+  const apiKeysRoutePending = !platformLoaded && location.pathname === "/api-keys"
+  const apiKeysRouteDisabled = platformLoaded && !platform.apiKeysEnabled && location.pathname === "/api-keys"
+
   return (
     <div className="min-h-svh bg-background text-foreground">
       <div className="grid min-h-svh lg:grid-cols-[240px_1fr]">
@@ -213,7 +224,7 @@ export function AppLayout() {
             </div>
             <Separator />
             <nav className="flex flex-col gap-1">
-              {links.filter((item) => item.to !== "/docs" || docsVisible).map((item) => (
+              {visibleLinks.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
@@ -275,7 +286,7 @@ export function AppLayout() {
               </Button>
             </div>
             <div key={location.pathname} className="animate-in fade-in-0 slide-in-from-bottom-2 duration-200">
-              <Outlet />
+              {apiKeysRoutePending ? null : apiKeysRouteDisabled ? <Navigate to="/generate" replace /> : <Outlet />}
             </div>
           </div>
         </main>

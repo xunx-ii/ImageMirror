@@ -65,6 +65,21 @@ func AdminOnly() gin.HandlerFunc {
 	}
 }
 
+func FeatureEnabled(check func(context.Context) (bool, error), message string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		enabled, err := check(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		if !enabled {
+			Abort(c, NewError(http.StatusForbidden, message, nil))
+			return
+		}
+		c.Next()
+	}
+}
+
 func APIKeyAuth(lookup APIKeyLookup) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
