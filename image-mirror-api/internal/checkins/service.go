@@ -14,6 +14,14 @@ import (
 
 var ErrAlreadyCheckedIn = errors.New("already checked in today")
 
+var checkinLocation = func() *time.Location {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("Asia/Shanghai", 8*60*60)
+	}
+	return location
+}()
+
 type Status struct {
 	Enabled     bool       `json:"enabled"`
 	Credits     int64      `json:"credits"`
@@ -44,12 +52,13 @@ func (s *Service) Status(ctx context.Context, userID string) (Status, error) {
 		Enabled: settings.Enabled,
 		Credits: settings.Credits,
 	}
+	checkinDate := todayCheckinDate()
 	var createdAt time.Time
 	err = s.db.QueryRow(ctx, `
 		SELECT created_at
 		FROM daily_checkins
-		WHERE user_id=$1 AND checkin_date=CURRENT_DATE
-	`, userID).Scan(&createdAt)
+		WHERE user_id=$1 AND checkin_date=$2
+	`, userID, checkinDate).Scan(&createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return status, nil
 	}
@@ -72,6 +81,7 @@ func (s *Service) Checkin(ctx context.Context, userID string) (Result, error) {
 	if settings.Credits <= 0 {
 		return Result{}, errors.New("daily check-in credits must be positive")
 	}
+	checkinDate := todayCheckinDate()
 
 	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -82,9 +92,9 @@ func (s *Service) Checkin(ctx context.Context, userID string) (Result, error) {
 	var checkinCreatedAt time.Time
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO daily_checkins(user_id, checkin_date, credits)
-		VALUES ($1, CURRENT_DATE, $2)
+		VALUES ($1, $2, $3)
 		RETURNING created_at
-	`, userID, settings.Credits).Scan(&checkinCreatedAt); err != nil {
+	`, userID, checkinDate, settings.Credits).Scan(&checkinCreatedAt); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return Result{}, ErrAlreadyCheckedIn
@@ -103,7 +113,7 @@ func (s *Service) Checkin(ctx context.Context, userID string) (Result, error) {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO credit_transactions(user_id, type, amount, balance_after, description)
 		VALUES ($1, 'RECHARGE', $2, $3, $4)
-	`, userID, settings.Credits, next, "daily check-in reward"); err != nil {
+	`, userID, settings.Credits, next, "每日签到奖励"); err != nil {
 		return Result{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -119,4 +129,8 @@ func (s *Service) Checkin(ctx context.Context, userID string) (Result, error) {
 		},
 		Balance: next,
 	}, nil
+}
+
+func todayCheckinDate() string {
+	return time.Now().In(checkinLocation).Format(time.DateOnly)
 }
