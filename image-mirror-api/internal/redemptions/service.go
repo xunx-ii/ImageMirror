@@ -79,6 +79,7 @@ func (s *Service) List(ctx context.Context, limit int32, offset int32) ([]Code, 
 		FROM redemption_codes rc
 		LEFT JOIN users used_user ON used_user.id=rc.used_by
 		LEFT JOIN users created_user ON created_user.id=rc.created_by
+		WHERE rc.deleted_at IS NULL
 		ORDER BY rc.created_at DESC
 		LIMIT $1 OFFSET $2
 	`, limit, offset)
@@ -110,7 +111,11 @@ func (s *Service) Disable(ctx context.Context, ids []string) (int64, error) {
 }
 
 func (s *Service) Delete(ctx context.Context, ids []string) (int64, error) {
-	tag, err := s.db.Exec(ctx, `DELETE FROM redemption_codes WHERE id=ANY($1::uuid[])`, ids)
+	tag, err := s.db.Exec(ctx, `
+		UPDATE redemption_codes
+		SET deleted_at=now(), updated_at=now()
+		WHERE id=ANY($1::uuid[]) AND deleted_at IS NULL
+	`, ids)
 	if err != nil {
 		return 0, err
 	}
@@ -131,7 +136,7 @@ func (s *Service) Redeem(ctx context.Context, userID string, rawCode string) (Co
 	row := tx.QueryRow(ctx, `
 		SELECT id, code, credits, status, expires_at, used_by, used_at, created_by, created_at, updated_at
 		FROM redemption_codes
-		WHERE code=$1
+		WHERE code=$1 AND deleted_at IS NULL
 		FOR UPDATE
 	`, codeValue)
 	item, err := scanCode(row)

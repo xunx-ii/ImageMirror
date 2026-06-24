@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { FormEvent } from "react"
-import { Download, ImagePlus, Loader2, RefreshCw, Sparkles, X } from "lucide-react"
+import { Download, History, ImagePlus, Loader2, Plus, RefreshCw, SendHorizontal, Upload, X } from "lucide-react"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
+import { ImageViewerDialog } from "@/components/image-viewer-dialog"
 import { PageHeader } from "@/components/page-header"
 import { SecureImage } from "@/components/secure-image"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -16,9 +16,10 @@ import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { downloadImage, expiresIn } from "@/lib/format"
+import { downloadImage, expiresIn, formatDate } from "@/lib/format"
 import { resolutionBucket, sizeString, validateImageSize } from "@/lib/image-size"
-import { defaultPlatformSettings, mergePlatformSettings } from "@/lib/platform"
+import { defaultPlatformSettings, mergePlatformSettings, platformSettingsUpdatedEvent } from "@/lib/platform"
+import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth"
 import type { ImageGeneration, PlatformSettings, PricingRule } from "@/types"
 
@@ -53,6 +54,8 @@ function parseDimensionInput(value: string) {
 export function GeneratePage() {
   const refreshMe = useAuthStore((state) => state.refreshMe)
   const referenceUrlRef = useRef<Set<string>>(new Set())
+  const messageScrollRef = useRef<HTMLDivElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [prompt, setPrompt] = useState("")
   const [width, setWidth] = useState(1024)
   const [height, setHeight] = useState(1024)
@@ -63,10 +66,21 @@ export function GeneratePage() {
   const [pricing, setPricing] = useState<PricingRule[]>([])
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
   const [current, setCurrent] = useState<ImageGeneration | null>(null)
+  const [history, setHistory] = useState<ImageGeneration[]>([])
+  const [historyLoading, setHistoryLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [referenceImages, setReferenceImages] = useState<ReferencePreview[]>([])
   const [previewReference, setPreviewReference] = useState<ReferencePreview | null>(null)
+  const [viewer, setViewer] = useState<ImageGeneration | null>(null)
   const [fileInputKey, setFileInputKey] = useState(0)
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    window.requestAnimationFrame(() => {
+      const node = messageScrollRef.current
+      if (!node) return
+      node.scrollTo({ top: node.scrollHeight, behavior })
+    })
+  }, [])
 
   useEffect(() => {
     const urls = referenceUrlRef.current
@@ -76,7 +90,24 @@ export function GeneratePage() {
     }
   }, [])
 
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true)
+    try {
+      const { data } = await api.get<{ data: ImageGeneration[] }>("/api/images?limit=30")
+      setHistory(data.data ?? [])
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
+    const handlePlatformSettingsUpdated = (event: Event) => {
+      setPlatform(mergePlatformSettings((event as CustomEvent<PlatformSettings>).detail))
+    }
+
+    window.addEventListener(platformSettingsUpdatedEvent, handlePlatformSettingsUpdated)
     Promise.all([
       api.get<{ data: PricingRule[] }>("/api/pricing"),
       api.get<PlatformSettings>("/api/settings/platform"),
@@ -86,7 +117,14 @@ export function GeneratePage() {
         setPlatform(mergePlatformSettings(platformResponse.data))
       })
       .catch((error) => toast.error(errorMessage(error)))
-  }, [])
+    const timer = window.setTimeout(() => {
+      void loadHistory()
+    }, 0)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener(platformSettingsUpdatedEvent, handlePlatformSettingsUpdated)
+    }
+  }, [loadHistory])
 
   const cost = useMemo(() => {
     const bucket = resolutionBucket(width, height)
@@ -96,8 +134,10 @@ export function GeneratePage() {
   const sizeError = useMemo(() => validateImageSize(width, height, platform.maxResolutionBucket), [height, platform.maxResolutionBucket, width])
   const bucket = resolutionBucket(width, height)
   const maxEdge = platform.allow4k ? 3840 : 2048
-  const maxHeight = platform.allow4k ? 2160 : 2048
+  const maxHeight = maxEdge
   const sizeDraftChanged = widthInput !== String(width) || heightInput !== String(height)
+  const currentId = current?.id
+  const currentStatus = current?.status
 
   function confirmDimensions(showToast = false) {
     const nextWidth = parseDimensionInput(widthInput)
@@ -123,19 +163,21 @@ export function GeneratePage() {
   }
 
   useEffect(() => {
-    if (!current || current.status === "COMPLETED" || current.status === "FAILED" || current.status === "EXPIRED") return
+    if (!currentId || currentStatus === "COMPLETED" || currentStatus === "FAILED" || currentStatus === "EXPIRED") return
     const timer = window.setInterval(async () => {
       try {
-        const { data } = await api.get<{ image: ImageGeneration }>(`/api/images/${current.id}/status`)
+        const { data } = await api.get<{ image: ImageGeneration }>(`/api/images/${currentId}/status`)
         setCurrent(data.image)
         if (data.image.status === "COMPLETED") {
           toast.success("图片已生成")
           void refreshMe()
+          void loadHistory()
           window.clearInterval(timer)
         }
         if (data.image.status === "FAILED") {
           toast.error(data.image.errorMessage ?? "生成失败")
           void refreshMe()
+          void loadHistory()
           window.clearInterval(timer)
         }
       } catch (error) {
@@ -143,7 +185,12 @@ export function GeneratePage() {
       }
     }, 2500)
     return () => window.clearInterval(timer)
-  }, [current, refreshMe])
+  }, [currentId, currentStatus, loadHistory, refreshMe])
+
+  useEffect(() => {
+    if (!currentId) return
+    scrollMessagesToBottom()
+  }, [currentId, currentStatus, scrollMessagesToBottom])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -171,6 +218,7 @@ export function GeneratePage() {
       setFileInputKey((value) => value + 1)
       toast.success("任务已提交")
       void refreshMe()
+      void loadHistory()
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {
@@ -218,185 +266,298 @@ export function GeneratePage() {
     setPreviewReference(null)
   }
 
+  function startNewChat() {
+    setCurrent(null)
+    setPrompt("")
+    clearReferenceImages()
+    setFileInputKey((value) => value + 1)
+  }
+
+  function openHistoryItem(image: ImageGeneration) {
+    setCurrent(image)
+    setPrompt(image.prompt)
+    clearReferenceImages()
+  }
+
   const busy = current?.status === "PENDING" || current?.status === "PROCESSING"
 
   return (
     <>
       <PageHeader title="生成工作台" />
-      <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>参数</CardTitle>
-            <CardDescription>生成结果会写入共享图片目录并保留 24 小时。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-5" onSubmit={submit}>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="prompt">提示词</FieldLabel>
-                  <Textarea id="prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={8} required />
-                  <FieldDescription>建议包含主体、材质、光线、构图和用途。</FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel>尺寸</FieldLabel>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      aria-label="宽度"
-                      type="number"
-                      min={16}
-                      max={maxEdge}
-                      step={16}
-                      value={widthInput}
-                      onBlur={() => confirmDimensions()}
-                      onChange={(event) => {
-                        setSizeDraftError(null)
-                        setWidthInput(event.target.value)
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter") return
-                        event.preventDefault()
-                        confirmDimensions()
-                        event.currentTarget.blur()
-                      }}
-                    />
-                    <Input
-                      aria-label="高度"
-                      type="number"
-                      min={16}
-                      max={maxHeight}
-                      step={16}
-                      value={heightInput}
-                      onBlur={() => confirmDimensions()}
-                      onChange={(event) => {
-                        setSizeDraftError(null)
-                        setHeightInput(event.target.value)
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter") return
-                        event.preventDefault()
-                        confirmDimensions()
-                        event.currentTarget.blur()
-                      }}
-                    />
-                  </div>
-                  {(sizeDraftError || !sizeDraftChanged) && <FieldDescription>{sizeDraftError ?? sizeError ?? `当前按 ${bucket.toUpperCase()} 档计费`}</FieldDescription>}
-                </Field>
-                <Field>
-                  <FieldLabel>质量</FieldLabel>
-                  <Select value={quality} onValueChange={(value) => setQuality(value ?? quality)}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue>{qualityLabel(quality)}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {qualityOptions.map((item) => (
-                          <SelectItem key={item.value} value={item.value}>
-                            {item.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="reference-images">参考图</FieldLabel>
-                  <Input
-                    key={fileInputKey}
-                    id="reference-images"
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    multiple
-                    onChange={(event) => {
-                      addReferenceFiles(event.target.files)
-                      event.currentTarget.value = ""
-                    }}
-                  />
-                  <FieldDescription>可选，最多 4 张 PNG、JPG 或 WEBP。</FieldDescription>
-                </Field>
-              </FieldGroup>
-              {referenceImages.length > 0 && (
-                <div className="grid grid-cols-4 gap-2 rounded-lg border bg-muted/20 p-3">
-                  {referenceImages.map((image) => (
-                    <div key={image.id} className="group relative aspect-square overflow-hidden rounded-lg border bg-background">
-                      <button type="button" className="h-full w-full" aria-label="查看参考图" onClick={() => setPreviewReference(image)}>
-                        <img src={image.url} alt={image.file.name} className="h-full w-full object-cover" />
-                      </button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="icon-xs"
-                        className="absolute top-1 right-1 bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-                        aria-label="移除参考图"
-                        onClick={() => removeReferenceImage(image.id)}
-                      >
-                          <X />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center justify-between rounded-lg border bg-muted/30 p-3">
-                <span className="text-sm text-muted-foreground">本次预扣</span>
-                <Badge variant="secondary">{sizeDraftChanged ? "-" : (cost ?? "-")} credits</Badge>
-              </div>
-              <Button disabled={submitting || busy || !prompt.trim() || !!sizeDraftError || (!sizeDraftChanged && (!!sizeError || cost == null))} type="submit">
-                {submitting || busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Sparkles data-icon="inline-start" />}
-                {submitting ? "提交中" : busy ? "生成中" : "生成图片"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <CardTitle>结果</CardTitle>
-                <CardDescription>{current ? `状态 ${current.status}` : "提交任务后会在这里显示生成进度。"}</CardDescription>
-              </div>
-              {current?.status === "COMPLETED" && (
-                <Button variant="outline" onClick={() => void downloadImage(current.id)}>
-                  <Download data-icon="inline-start" />
-                  下载
-                </Button>
-              )}
+      <div className="grid h-[calc(100svh-170px)] min-h-[560px] gap-4 overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)]">
+        <aside className="hidden min-h-0 overflow-hidden rounded-lg border bg-background lg:flex lg:flex-col">
+          <div className="flex items-center justify-between gap-2 border-b p-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <History />
+              历史
             </div>
-          </CardHeader>
-          <CardContent>
+            <Button type="button" variant="outline" size="icon-sm" aria-label="新建对话" onClick={startNewChat}>
+              <Plus />
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            {historyLoading ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">加载中</div>
+            ) : history.length === 0 ? (
+              <div className="px-2 py-3 text-sm text-muted-foreground">暂无历史</div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                {history.map((image) => (
+                  <button
+                    key={image.id}
+                    type="button"
+                    className={cn(
+                      "flex min-h-16 flex-col gap-1 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted",
+                      current?.id === image.id && "bg-muted"
+                    )}
+                    onClick={() => openHistoryItem(image)}
+                  >
+                    <span className="line-clamp-2 leading-5">{image.prompt}</span>
+                    <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>{formatDate(image.createdAt)}</span>
+                      <Badge variant={image.status === "COMPLETED" ? "secondary" : "outline"}>{image.status}</Badge>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-background">
+          <div className="flex items-center justify-between gap-3 border-b px-4 py-3 lg:hidden">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <History />
+              最近历史
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={startNewChat}>
+              <Plus data-icon="inline-start" />
+              新建
+            </Button>
+          </div>
+
+          <div ref={messageScrollRef} className="min-h-0 flex-1 overflow-auto bg-muted/10 p-4 md:p-6">
             {!current ? (
-              <Empty className="min-h-[420px]">
+              <Empty className="min-h-full">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
                     <ImagePlus />
                   </EmptyMedia>
-                  <EmptyTitle>等待生成任务</EmptyTitle>
-                  <EmptyDescription>图片完成后可在图库中继续查看，过期前都可以下载。</EmptyDescription>
+                  <EmptyTitle>开始一张新图片</EmptyTitle>
+                  <EmptyDescription>输入提示词，也可以附上参考图。</EmptyDescription>
                 </EmptyHeader>
               </Empty>
-            ) : busy ? (
-              <div className="flex min-h-[420px] flex-col justify-center gap-4 rounded-lg border bg-muted/20 p-6">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <RefreshCw className="animate-spin" />
-                  Worker 正在处理任务
-                </div>
-                <Progress value={current.status === "PROCESSING" ? 66 : 30} />
-                <div className="text-sm text-muted-foreground">任务 ID {current.id}</div>
-              </div>
-            ) : current.status === "COMPLETED" ? (
-              <div className="flex flex-col gap-3">
-                <SecureImage imageId={current.id} alt={current.prompt} className="max-h-[620px] w-full rounded-lg object-contain" />
-                <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                  <Badge variant="secondary">{current.size}</Badge>
-                  <Badge variant="secondary">{qualityLabel(current.quality)}</Badge>
-                  {current.referenceCount > 0 && <Badge variant="secondary">参考图 {current.referenceCount}</Badge>}
-                  <span>过期倒计时 {expiresIn(current.expiresAt)}</span>
-                </div>
-              </div>
             ) : (
-              <div className="rounded-lg border p-4 text-sm text-muted-foreground">{current.errorMessage ?? "任务未完成"}</div>
+              <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+                <div className="flex justify-end">
+                  <div className="max-w-[78%] rounded-lg bg-primary px-4 py-3 text-sm text-primary-foreground">
+                    <div className="whitespace-pre-wrap leading-6">{current.prompt}</div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <Badge variant="secondary">{current.size}</Badge>
+                      <Badge variant="secondary">{qualityLabel(current.quality)}</Badge>
+                      {current.referenceCount > 0 && <Badge variant="secondary">参考图 {current.referenceCount}</Badge>}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex justify-start">
+                  <div className="flex w-full max-w-[82%] flex-col gap-3 rounded-lg border bg-background p-3 shadow-sm">
+                    {busy ? (
+                      <div className="flex min-h-[260px] flex-col justify-center gap-4 p-3">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <RefreshCw className="animate-spin" />
+                          {current.status === "PROCESSING" ? "正在生成图片" : "正在排队"}
+                        </div>
+                        <Progress value={current.status === "PROCESSING" ? 66 : 30} />
+                        <div className="text-xs text-muted-foreground">任务 ID {current.id}</div>
+                      </div>
+                    ) : current.status === "COMPLETED" ? (
+                      <>
+                        <button
+                          type="button"
+                          className="group flex max-h-[52vh] w-full items-center justify-center overflow-hidden rounded-lg bg-muted/30 outline-none transition-all duration-150 hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 active:scale-[0.99]"
+                          aria-label="查看大图"
+                          onClick={() => setViewer(current)}
+                        >
+                          <SecureImage
+                            imageId={current.id}
+                            alt={current.prompt}
+                            className="max-h-[52vh] w-full object-contain transition-transform duration-200 group-hover:scale-[1.01]"
+                            onLoad={() => scrollMessagesToBottom()}
+                          />
+                        </button>
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+                          <span>过期倒计时 {expiresIn(current.expiresAt)}</span>
+                          <Button variant="outline" size="sm" onClick={() => void downloadImage(current.id)}>
+                            <Download data-icon="inline-start" />
+                            下载
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">{current.errorMessage ?? "任务未完成"}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+
+          <form className="flex shrink-0 flex-col gap-3 border-t bg-background p-3" onSubmit={submit}>
+            {referenceImages.length > 0 && (
+              <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-2">
+                {referenceImages.map((image) => (
+                  <div key={image.id} className="group relative size-14 overflow-hidden rounded-lg border bg-muted">
+                    <button type="button" className="h-full w-full" aria-label="查看参考图" onClick={() => setPreviewReference(image)}>
+                      <img src={image.url} alt={image.file.name} className="h-full w-full object-cover" />
+                    </button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon-xs"
+                      className="absolute top-1 right-1 bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                      aria-label="移除参考图"
+                      onClick={() => removeReferenceImage(image.id)}
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 rounded-lg border bg-background p-2.5">
+              <FieldGroup className="gap-2">
+                <Field>
+                  <FieldLabel htmlFor="prompt" className="sr-only">
+                    提示词
+                  </FieldLabel>
+                  <Textarea
+                    id="prompt"
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    rows={2}
+                    className="resize-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
+                    placeholder="描述你想生成的图片"
+                    required
+                  />
+                </Field>
+              </FieldGroup>
+
+              <div className="border-t pt-2">
+                <FieldGroup className="flex-row flex-wrap items-center gap-2">
+                  <Field orientation="horizontal" className="w-auto shrink-0 items-center gap-2">
+                    <FieldLabel className="!flex-none text-xs text-muted-foreground">尺寸</FieldLabel>
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        aria-label="宽度"
+                        type="number"
+                        min={16}
+                        max={maxEdge}
+                        step={16}
+                        value={widthInput}
+                        className="h-7 w-20 px-2 text-sm"
+                        onBlur={() => confirmDimensions()}
+                        onChange={(event) => {
+                          setSizeDraftError(null)
+                          setWidthInput(event.target.value)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter") return
+                          event.preventDefault()
+                          confirmDimensions()
+                          event.currentTarget.blur()
+                        }}
+                      />
+                      <span className="text-xs text-muted-foreground">x</span>
+                      <Input
+                        aria-label="高度"
+                        type="number"
+                        min={16}
+                        max={maxHeight}
+                        step={16}
+                        value={heightInput}
+                        className="h-7 w-20 px-2 text-sm"
+                        onBlur={() => confirmDimensions()}
+                        onChange={(event) => {
+                          setSizeDraftError(null)
+                          setHeightInput(event.target.value)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter") return
+                          event.preventDefault()
+                          confirmDimensions()
+                          event.currentTarget.blur()
+                        }}
+                      />
+                    </div>
+                    {(sizeDraftError || !sizeDraftChanged) && (
+                      <FieldDescription className={cn("whitespace-nowrap text-xs", sizeDraftError && "text-destructive")}>
+                        {sizeDraftError ?? sizeError ?? `${bucket.toUpperCase()} 档`}
+                      </FieldDescription>
+                    )}
+                  </Field>
+                  <Field orientation="horizontal" className="w-auto shrink-0 items-center gap-2">
+                    <FieldLabel className="!flex-none text-xs text-muted-foreground">质量</FieldLabel>
+                    <Select value={quality} onValueChange={(value) => setQuality(value ?? quality)}>
+                      <SelectTrigger className="h-7 w-24">
+                        <SelectValue>{qualityLabel(quality)}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {qualityOptions.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field orientation="horizontal" className="w-auto shrink-0 items-center gap-2">
+                    <FieldLabel htmlFor="reference-images" className="!flex-none text-xs text-muted-foreground">
+                      参考图
+                    </FieldLabel>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon-sm"
+                      className="rounded-full"
+                      aria-label="上传参考图"
+                      disabled={referenceImages.length >= 4}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <Upload />
+                    </Button>
+                    <Input
+                      ref={fileInputRef}
+                      key={fileInputKey}
+                      id="reference-images"
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => {
+                        addReferenceFiles(event.target.files)
+                        event.currentTarget.value = ""
+                      }}
+                    />
+                  </Field>
+                  <div className="ml-auto flex shrink-0 items-center gap-2">
+                    <Badge variant="secondary">{sizeDraftChanged ? "-" : (cost ?? "-")} credits</Badge>
+                    <Button
+                      size="sm"
+                      disabled={submitting || busy || !prompt.trim() || !!sizeDraftError || (!sizeDraftChanged && (!!sizeError || cost == null))}
+                      type="submit"
+                    >
+                      {submitting || busy ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <SendHorizontal data-icon="inline-start" />}
+                      {submitting ? "提交中" : busy ? "生成中" : "发送"}
+                    </Button>
+                  </div>
+                </FieldGroup>
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
       <Dialog open={!!previewReference} onOpenChange={(open) => !open && setPreviewReference(null)}>
         <DialogContent className="max-h-[96svh] max-w-[96vw] overflow-hidden sm:max-w-4xl">
@@ -410,6 +571,7 @@ export function GeneratePage() {
           )}
         </DialogContent>
       </Dialog>
+      <ImageViewerDialog image={viewer} open={!!viewer} onOpenChange={(open) => !open && setViewer(null)} />
     </>
   )
 }

@@ -376,23 +376,50 @@ func (s *Service) ReadFile(ctx context.Context, userID string, imageID string) (
 }
 
 func (s *Service) DeleteForUser(ctx context.Context, userID string, imageID string) error {
-	gen, err := s.FindForUser(ctx, userID, imageID)
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	row := tx.QueryRow(ctx, `
+		SELECT id, user_id, api_key_id, model, prompt, size, quality, status, storage_key, storage_url, reference_keys, credits_cost, error_message, expires_at, deleted_at, created_at, updated_at
+		FROM image_generations
+		WHERE id=$1 AND user_id=$2
+		FOR UPDATE
+	`, imageID, userID)
+	var gen Generation
+	if err := scanGeneration(row, &gen); err != nil {
 		return err
 	}
 	if gen.DeletedAt != nil {
 		return nil
 	}
+	row = tx.QueryRow(ctx, `
+		UPDATE image_generations
+		SET status='EXPIRED', deleted_at=now(), updated_at=now()
+		WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL
+		RETURNING id, user_id, api_key_id, model, prompt, size, quality, status, storage_key, storage_url, reference_keys, credits_cost, error_message, expires_at, deleted_at, created_at, updated_at
+	`, imageID, userID)
+	var deleted Generation
+	if err := scanGeneration(row, &deleted); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if gen.Status == "PENDING" {
+		if err := s.billing.RefundWithTx(ctx, tx, gen.UserID, gen.CreditsCost, "image deleted before processing", gen.ID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 	if gen.StorageKey != nil {
 		_ = s.storage.DeleteImage(ctx, *gen.StorageKey)
 	}
 	s.deleteReferenceImages(ctx, gen.ReferenceKeys)
-	_, err = s.db.Exec(ctx, `
-		UPDATE image_generations
-		SET status='EXPIRED', deleted_at=now(), updated_at=now()
-		WHERE id=$1 AND user_id=$2
-	`, imageID, userID)
-	return err
+	return nil
 }
 
 func (s *Service) DeleteManyForUser(ctx context.Context, userID string, imageIDs []string) (int, error) {
@@ -533,14 +560,26 @@ func (s *Service) ExpireOld(ctx context.Context, limit int32) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	expired := 0
 	for _, it := range items {
+		tag, err := s.db.Exec(ctx, `
+			UPDATE image_generations
+			SET status='EXPIRED', deleted_at=now(), updated_at=now()
+			WHERE id=$1 AND status='COMPLETED' AND deleted_at IS NULL
+		`, it.id)
+		if err != nil {
+			return expired, err
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
 		if it.key != nil {
 			_ = s.storage.DeleteImage(ctx, *it.key)
 		}
 		s.deleteReferenceImages(ctx, it.refs)
-		_, _ = s.db.Exec(ctx, `UPDATE image_generations SET status='EXPIRED', deleted_at=now(), updated_at=now() WHERE id=$1`, it.id)
+		expired++
 	}
-	return len(items), nil
+	return expired, nil
 }
 
 func normalize(req CreateRequest, defaultModel string) CreateRequest {

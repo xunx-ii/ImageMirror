@@ -55,7 +55,7 @@ export function AuthPage({ mode }: AuthPageProps) {
       )
       setSession(data.user, data.tokens)
       toast.success(isLogin ? "登录成功" : "注册成功")
-      navigate("/dashboard")
+      navigate("/generate")
     } catch (error) {
       toast.error(errorMessage(error))
     } finally {

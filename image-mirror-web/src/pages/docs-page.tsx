@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { FileText } from "lucide-react"
+import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
@@ -10,14 +11,22 @@ import { renderMarkdown } from "@/lib/markdown"
 import type { SiteContent } from "@/types"
 
 export function DocsPage() {
+  const navigate = useNavigate()
   const [docs, setDocs] = useState<SiteContent | null>(null)
 
   useEffect(() => {
     api
       .get<SiteContent>("/api/content/docs")
       .then((response) => setDocs(response.data))
-      .catch((error) => toast.error(errorMessage(error)))
-  }, [])
+      .catch((error) => {
+        const status = (error as { response?: { status?: number } }).response?.status
+        if (status === 404) {
+          navigate("/generate", { replace: true })
+          return
+        }
+        toast.error(errorMessage(error))
+      })
+  }, [navigate])
 
   return (
     <>

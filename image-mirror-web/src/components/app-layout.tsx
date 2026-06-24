@@ -5,25 +5,24 @@ import {
   GalleryHorizontalEnd,
   ImagePlus,
   KeyRound,
-  LayoutDashboard,
   LogOut,
   Shield,
 } from "lucide-react"
-import { NavLink, Outlet, useNavigate } from "react-router-dom"
-import { useEffect, useState } from "react"
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
+import { siteContentUpdatedEvent } from "@/lib/content"
 import { renderMarkdown } from "@/lib/markdown"
 import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle, platformSettingsUpdatedEvent } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
 import type { PlatformSettings, SiteContent } from "@/types"
 
 const links = [
-  { to: "/dashboard", label: "概览", icon: LayoutDashboard },
   { to: "/generate", label: "生成", icon: ImagePlus },
   { to: "/gallery", label: "图库", icon: GalleryHorizontalEnd },
   { to: "/billing", label: "账单", icon: BadgeCent },
@@ -33,12 +32,19 @@ const links = [
 
 export function AppLayout() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const pathRef = useRef(location.pathname)
   const user = useAuthStore((state) => state.user)
   const tokens = useAuthStore((state) => state.tokens)
   const logout = useAuthStore((state) => state.logout)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
   const [announcementOpen, setAnnouncementOpen] = useState(false)
+  const [docsVisible, setDocsVisible] = useState(false)
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
+
+  useEffect(() => {
+    pathRef.current = location.pathname
+  }, [location.pathname])
 
   useEffect(() => {
     let active = true
@@ -69,9 +75,21 @@ export function AppLayout() {
   }, [])
 
   useEffect(() => {
+    let active = true
+    const handleContentUpdated = (event: Event) => {
+      const content = (event as CustomEvent<SiteContent>).detail
+      if (content.key !== "announcement") return
+      setAnnouncement(content)
+      if (!content.isActive || !content.body.trim()) {
+        setAnnouncementOpen(false)
+      }
+    }
+
+    window.addEventListener(siteContentUpdatedEvent, handleContentUpdated)
     api
       .get<SiteContent>("/api/content/announcement")
       .then((response) => {
+        if (!active) return
         setAnnouncement(response.data)
         if (!response.data.body.trim() || !user?.id || !tokens?.accessToken) return
         const sessionKey = `image-mirror-announcement:${user.id}:${tokens.accessToken.slice(-16)}`
@@ -81,9 +99,47 @@ export function AppLayout() {
       })
       .catch((error) => {
         const status = (error as { response?: { status?: number } }).response?.status
+        if (active && status === 404) {
+          setAnnouncement(null)
+          setAnnouncementOpen(false)
+        }
         if (status !== 404) toast.error(errorMessage(error))
       })
+    return () => {
+      active = false
+      window.removeEventListener(siteContentUpdatedEvent, handleContentUpdated)
+    }
   }, [tokens?.accessToken, user?.id])
+
+  useEffect(() => {
+    let active = true
+    const handleContentUpdated = (event: Event) => {
+      const content = (event as CustomEvent<SiteContent>).detail
+      if (content.key !== "docs") return
+      setDocsVisible(content.isActive)
+      if (!content.isActive && pathRef.current === "/docs") {
+        navigate("/generate", { replace: true })
+      }
+    }
+
+    window.addEventListener(siteContentUpdatedEvent, handleContentUpdated)
+    api
+      .get<SiteContent>("/api/content/docs")
+      .then(() => {
+        if (active) setDocsVisible(true)
+      })
+      .catch((error) => {
+        const status = (error as { response?: { status?: number } }).response?.status
+        if (active) setDocsVisible(false)
+        if (status === 404 && pathRef.current === "/docs") {
+          navigate("/generate", { replace: true })
+        }
+      })
+    return () => {
+      active = false
+      window.removeEventListener(siteContentUpdatedEvent, handleContentUpdated)
+    }
+  }, [navigate])
 
   return (
     <div className="min-h-svh bg-background text-foreground">
@@ -101,13 +157,13 @@ export function AppLayout() {
             </div>
             <Separator />
             <nav className="flex flex-col gap-1">
-              {links.map((item) => (
+              {links.filter((item) => item.to !== "/docs" || docsVisible).map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
                   className={({ isActive }) =>
                     [
-                      "flex h-9 items-center gap-2 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                      "flex h-9 items-center gap-2 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-all duration-150 hover:-translate-y-px hover:bg-muted hover:text-foreground active:translate-y-px",
                       isActive ? "bg-background text-foreground shadow-sm ring-1 ring-border" : "",
                     ].join(" ")
                   }
@@ -121,7 +177,7 @@ export function AppLayout() {
                   to="/admin"
                   className={({ isActive }) =>
                     [
-                      "flex h-9 items-center gap-2 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                      "flex h-9 items-center gap-2 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-all duration-150 hover:-translate-y-px hover:bg-muted hover:text-foreground active:translate-y-px",
                       isActive ? "bg-background text-foreground shadow-sm ring-1 ring-border" : "",
                     ].join(" ")
                   }
@@ -152,11 +208,13 @@ export function AppLayout() {
         <main className="min-w-0">
           <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-6">
             <div className="flex justify-end">
-              <Button variant="outline" size="icon" aria-label="公告" onClick={() => setAnnouncementOpen(true)} disabled={!announcement?.body.trim()}>
+              <Button variant="outline" size="icon" aria-label="公告" onClick={() => setAnnouncementOpen(true)} disabled={!announcement?.isActive || !announcement.body.trim()}>
                 <Bell />
               </Button>
             </div>
-            <Outlet />
+            <div key={location.pathname} className="animate-in fade-in-0 slide-in-from-bottom-2 duration-200">
+              <Outlet />
+            </div>
           </div>
         </main>
       </div>

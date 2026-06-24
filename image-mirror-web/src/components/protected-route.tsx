@@ -13,6 +13,6 @@ export function ProtectedRoute() {
 
 export function AdminRoute() {
   const user = useAuthStore((state) => state.user)
-  if (!user || user.role !== "ADMIN") return <Navigate to="/dashboard" replace />
+  if (!user || user.role !== "ADMIN") return <Navigate to="/generate" replace />
   return <Outlet />
 }

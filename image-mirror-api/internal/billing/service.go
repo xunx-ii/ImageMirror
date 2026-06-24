@@ -35,6 +35,10 @@ func (s *Service) Refund(ctx context.Context, userID string, amount int64, descr
 	return s.change(ctx, userID, amount, "REFUND", description, &relatedID, false)
 }
 
+func (s *Service) RefundWithTx(ctx context.Context, tx pgx.Tx, userID string, amount int64, description string, relatedID string) error {
+	return s.changeWithTx(ctx, tx, userID, amount, "REFUND", description, &relatedID, false)
+}
+
 func (s *Service) Recharge(ctx context.Context, userID string, amount int64, description string) error {
 	return s.change(ctx, userID, amount, "RECHARGE", description, nil, false)
 }
@@ -85,6 +89,16 @@ func (s *Service) change(ctx context.Context, userID string, delta int64, txType
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := s.changeWithTx(ctx, tx, userID, delta, txType, description, relatedID, enforcePositive); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Service) changeWithTx(ctx context.Context, tx pgx.Tx, userID string, delta int64, txType string, description string, relatedID *string, enforcePositive bool) error {
+	if delta == 0 {
+		return nil
+	}
 	var balance int64
 	if err := tx.QueryRow(ctx, `SELECT balance FROM users WHERE id=$1 FOR UPDATE`, userID).Scan(&balance); err != nil {
 		return err
@@ -102,5 +116,5 @@ func (s *Service) change(ctx context.Context, userID string, delta int64, txType
 	`, userID, txType, delta, next, description, relatedID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }

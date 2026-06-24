@@ -32,6 +32,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { emitSiteContentUpdated } from "@/lib/content"
 import { formatDate } from "@/lib/format"
 import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
@@ -213,6 +214,7 @@ export function AdminPage() {
         setSize("2k")
         setEditingPricingId(null)
       }
+      emitPlatformSettingsUpdated(nextPlatform)
       toast.success(nextPlatform.allow4k ? "已启用 4K 图片" : "已禁用 4K，最大支持 2K")
       await load()
     } catch (error) {
@@ -275,6 +277,7 @@ export function AdminPage() {
         setAnnouncementBody(data.body)
         setAnnouncementActive(data.isActive)
       }
+      emitSiteContentUpdated(data)
       toast.success(isDocs ? "文档已保存" : "公告已保存")
     } catch (error) {
       toast.error(errorMessage(error))
