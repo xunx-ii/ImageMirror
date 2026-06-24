@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDate } from "@/lib/format"
 import { useAuthStore } from "@/stores/auth"
-import type { CreditTransaction, PaymentOrder, RedemptionHistoryItem } from "@/types"
+import type { CreditTransaction, EPaySettings, PaymentOrder, RedemptionHistoryItem } from "@/types"
 
 type PaymentSession = {
   order: PaymentOrder
@@ -31,17 +31,21 @@ export function BillingPage() {
   const [redemptions, setRedemptions] = useState<RedemptionHistoryItem[]>([])
   const [redemptionOpen, setRedemptionOpen] = useState(false)
   const [paymentSession, setPaymentSession] = useState<PaymentSession | null>(null)
+  const [epayEnabled, setEPayEnabled] = useState(false)
   const [loading, setLoading] = useState(false)
   const [redeeming, setRedeeming] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const [txResponse, redemptionResponse] = await Promise.all([
+      const [txResponse, redemptionResponse, epayResponse] = await Promise.all([
         api.get<{ data: CreditTransaction[] }>("/api/billing/transactions?limit=100"),
         api.get<{ data: RedemptionHistoryItem[] }>("/api/billing/redemptions?limit=100"),
+        api.get<EPaySettings>("/api/settings/epay"),
       ])
       setTransactions(txResponse.data.data ?? [])
       setRedemptions(redemptionResponse.data.data ?? [])
+      setEPayEnabled(epayResponse.data.enabled)
+      if (!epayResponse.data.enabled) setPaymentSession(null)
       await refreshMe()
     } catch (error) {
       toast.error(errorMessage(error))
@@ -57,6 +61,10 @@ export function BillingPage() {
 
   async function createPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!epayEnabled) {
+      toast.error("在线充值已关闭")
+      return
+    }
     setLoading(true)
     try {
       const { data } = await api.post<{ order: PaymentOrder; payUrl: string }>("/api/billing/epay/orders", {
@@ -100,33 +108,35 @@ export function BillingPage() {
       />
       <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
         <div className="flex flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>在线充值</CardTitle>
-              <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="flex flex-col gap-5" onSubmit={createPayment}>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="amount">充值金额（人民币）</FieldLabel>
-                    <Input
-                      id="amount"
-                      type="number"
-                      min={1}
-                      value={amount}
-                      onChange={(event) => setAmount(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
-                      required
-                    />
-                  </Field>
-                </FieldGroup>
-                <Button disabled={loading} type="submit">
-                  <BadgeCent data-icon="inline-start" />
-                  {loading ? "创建订单中" : "去支付"}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
+          {epayEnabled && (
+            <Card>
+              <CardHeader>
+                <CardTitle>在线充值</CardTitle>
+                <CardDescription>当前余额 {user?.balance ?? 0} credits</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form className="flex flex-col gap-5" onSubmit={createPayment}>
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel htmlFor="amount">充值金额（人民币）</FieldLabel>
+                      <Input
+                        id="amount"
+                        type="number"
+                        min={1}
+                        value={amount}
+                        onChange={(event) => setAmount(Math.max(1, Math.floor(Number(event.target.value) || 1)))}
+                        required
+                      />
+                    </Field>
+                  </FieldGroup>
+                  <Button disabled={loading} type="submit">
+                    <BadgeCent data-icon="inline-start" />
+                    {loading ? "创建订单中" : "去支付"}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>

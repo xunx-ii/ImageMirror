@@ -7,15 +7,49 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/linxunxi/image-mirror/internal/images"
+	"github.com/linxunxi/image-mirror/internal/systemconfig"
 	"github.com/linxunxi/image-mirror/internal/usage"
 )
 
 const (
 	TypeImageGenerate = "image:generate"
 	TypeImageCleanup  = "image:cleanup"
+
+	imageGenerationActiveKey    = "image-mirror:image-generation:active"
+	imageGenerationRequeueDelay = 5 * time.Second
+	imageGenerationSlotTTL      = 2 * time.Hour
 )
+
+var acquireGenerationSlotScript = redis.NewScript(`
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+
+if current >= limit then
+	return 0
+end
+
+current = redis.call("INCR", KEYS[1])
+redis.call("EXPIRE", KEYS[1], ttl)
+
+if current > limit then
+	redis.call("DECR", KEYS[1])
+	return 0
+end
+
+return 1
+`)
+
+var releaseGenerationSlotScript = redis.NewScript(`
+local current = tonumber(redis.call("DECR", KEYS[1]))
+if current <= 0 then
+	redis.call("DEL", KEYS[1])
+end
+return current
+`)
 
 type ImageGeneratePayload struct {
 	ImageID string `json:"imageId"`
@@ -38,22 +72,44 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) EnqueueGenerate(ctx context.Context, imageID string) error {
+	return c.EnqueueGenerateIn(ctx, imageID, 0)
+}
+
+func (c *Client) EnqueueGenerateIn(ctx context.Context, imageID string, delay time.Duration) error {
 	payload, err := json.Marshal(ImageGeneratePayload{ImageID: imageID})
 	if err != nil {
 		return err
 	}
-	_, err = c.client.EnqueueContext(ctx, asynq.NewTask(TypeImageGenerate, payload), asynq.Queue("image-generation"), asynq.Timeout(c.generateTimeout), asynq.MaxRetry(2))
+	options := []asynq.Option{
+		asynq.Queue("image-generation"),
+		asynq.Timeout(c.generateTimeout),
+		asynq.MaxRetry(2),
+	}
+	if delay > 0 {
+		options = append(options, asynq.ProcessIn(delay))
+	}
+	_, err = c.client.EnqueueContext(ctx, asynq.NewTask(TypeImageGenerate, payload), options...)
 	return err
 }
 
 type Processor struct {
-	images *images.Service
-	usage  *usage.Service
-	logger *slog.Logger
+	images  *images.Service
+	usage   *usage.Service
+	configs *systemconfig.Service
+	redis   *redis.Client
+	queue   *Client
+	logger  *slog.Logger
 }
 
-func NewProcessor(imagesSvc *images.Service, usageSvc *usage.Service, logger *slog.Logger) *Processor {
-	return &Processor{images: imagesSvc, usage: usageSvc, logger: logger}
+func NewProcessor(imagesSvc *images.Service, usageSvc *usage.Service, configSvc *systemconfig.Service, redisClient *redis.Client, queueClient *Client, logger *slog.Logger) *Processor {
+	return &Processor{
+		images:  imagesSvc,
+		usage:   usageSvc,
+		configs: configSvc,
+		redis:   redisClient,
+		queue:   queueClient,
+		logger:  logger,
+	}
 }
 
 func (p *Processor) Mux() *asynq.ServeMux {
@@ -68,8 +124,48 @@ func (p *Processor) handleGenerate(ctx context.Context, task *asynq.Task) error 
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
 		return err
 	}
-	p.logger.Info("processing image generation", "image_id", payload.ImageID)
+	acquired, limit, err := p.acquireGenerateSlot(ctx)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		p.logger.Info("image generation waiting for concurrency slot", "image_id", payload.ImageID, "limit", limit)
+		return p.queue.EnqueueGenerateIn(ctx, payload.ImageID, imageGenerationRequeueDelay)
+	}
+	defer p.releaseGenerateSlot()
+
+	p.logger.Info("processing image generation", "image_id", payload.ImageID, "limit", limit)
 	return p.images.Process(ctx, payload.ImageID)
+}
+
+func (p *Processor) acquireGenerateSlot(ctx context.Context) (bool, int, error) {
+	limit := systemconfig.DefaultImageGenerationConcurrency
+	if p.configs != nil {
+		settings, err := p.configs.GenerationSettings(ctx)
+		if err != nil {
+			return false, limit, err
+		}
+		limit = settings.ImageGenerationConcurrency
+	}
+	if p.redis == nil {
+		return true, limit, nil
+	}
+	acquired, err := acquireGenerationSlotScript.Run(ctx, p.redis, []string{imageGenerationActiveKey}, limit, int(imageGenerationSlotTTL.Seconds())).Int()
+	if err != nil {
+		return false, limit, err
+	}
+	return acquired == 1, limit, nil
+}
+
+func (p *Processor) releaseGenerateSlot() {
+	if p.redis == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := releaseGenerationSlotScript.Run(ctx, p.redis, []string{imageGenerationActiveKey}).Err(); err != nil {
+		p.logger.Warn("image generation slot release failed", "error", err)
+	}
 }
 
 func (p *Processor) handleCleanup(ctx context.Context, _ *asynq.Task) error {
@@ -98,7 +194,7 @@ func (p *Processor) handleCleanup(ctx context.Context, _ *asynq.Task) error {
 
 func RunServer(redis asynq.RedisClientOpt, processor *Processor) error {
 	server := asynq.NewServer(redis, asynq.Config{
-		Concurrency: 4,
+		Concurrency: systemconfig.MaxImageGenerationConcurrency + 2,
 		Queues: map[string]int{
 			"image-generation": 8,
 			"default":          1,

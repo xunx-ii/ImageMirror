@@ -36,7 +36,7 @@ func main() {
 	}
 	defer scheduler.Shutdown()
 
-	processor := queue.NewProcessor(container.Services.Images, container.Services.Usage, container.Logger)
+	processor := queue.NewProcessor(container.Services.Images, container.Services.Usage, container.Services.ConfigStore, container.Redis, container.Services.Queue, container.Logger)
 	container.Logger.Info("worker listening")
 	if err := queue.RunServer(container.RedisOpt, processor); err != nil {
 		log.Fatal(err)

@@ -23,6 +23,11 @@ const (
 	KeyMaxResolution = "max_resolution_bucket"
 	KeySiteTitle     = "site_title"
 	KeySiteSubtitle  = "site_subtitle"
+
+	KeyImageGenerationConcurrency = "image_generation_concurrency"
+
+	DefaultImageGenerationConcurrency = 10
+	MaxImageGenerationConcurrency     = 100
 )
 
 type OpenAISettings struct {
@@ -48,6 +53,10 @@ type PlatformSettings struct {
 	Allow4K             bool   `json:"allow4k"`
 	SiteTitle           string `json:"siteTitle"`
 	SiteSubtitle        string `json:"siteSubtitle"`
+}
+
+type GenerationSettings struct {
+	ImageGenerationConcurrency int `json:"imageGenerationConcurrency"`
 }
 
 type Service struct {
@@ -110,6 +119,28 @@ func (s *Service) MaxResolutionBucket(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return settings.MaxResolutionBucket, nil
+}
+
+func (s *Service) GenerationSettings(ctx context.Context) (GenerationSettings, error) {
+	value, err := s.value(ctx, KeyImageGenerationConcurrency)
+	if err != nil {
+		return GenerationSettings{}, err
+	}
+	concurrency := DefaultImageGenerationConcurrency
+	if parsed, ok := parsePositiveInt(value); ok {
+		concurrency = normalizeImageGenerationConcurrency(int(parsed))
+	}
+	return GenerationSettings{ImageGenerationConcurrency: concurrency}, nil
+}
+
+func (s *Service) UpdateGenerationSettings(ctx context.Context, imageGenerationConcurrency int, updatedBy string) (GenerationSettings, error) {
+	settings := GenerationSettings{
+		ImageGenerationConcurrency: normalizeImageGenerationConcurrency(imageGenerationConcurrency),
+	}
+	if err := s.upsert(ctx, KeyImageGenerationConcurrency, strconv.Itoa(settings.ImageGenerationConcurrency), updatedBy); err != nil {
+		return GenerationSettings{}, err
+	}
+	return settings, nil
 }
 
 func (s *Service) GetOpenAI(ctx context.Context, fallbackAPIKey string, fallbackBaseURL string) (string, string, error) {
@@ -307,6 +338,16 @@ func (s *Service) upsert(ctx context.Context, key string, value string, updatedB
 func parsePositiveInt(value string) (int64, bool) {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 	return parsed, err == nil && parsed > 0
+}
+
+func normalizeImageGenerationConcurrency(value int) int {
+	if value <= 0 {
+		return DefaultImageGenerationConcurrency
+	}
+	if value > MaxImageGenerationConcurrency {
+		return MaxImageGenerationConcurrency
+	}
+	return value
 }
 
 func normalizePlatform(maxResolutionBucket string, siteTitle string, siteSubtitle string) PlatformSettings {

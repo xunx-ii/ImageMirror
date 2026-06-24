@@ -42,7 +42,7 @@ import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
 import { defaultPlatformSettings, emitPlatformSettingsUpdated, mergePlatformSettings } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { AdminOverview, ContentAsset, EPaySettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
+import type { AdminOverview, ContentAsset, EPaySettings, GenerationSettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
 type UsageDetailKind = "prompt" | "result"
@@ -89,6 +89,7 @@ export function AdminPage() {
   const [openAI, setOpenAI] = useState<OpenAISettings | null>(null)
   const [epay, setEPay] = useState<EPaySettings | null>(null)
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
+  const [generationSettings, setGenerationSettings] = useState<GenerationSettings>({ imageGenerationConcurrency: 10 })
   const [docs, setDocs] = useState<SiteContent | null>(null)
   const [announcement, setAnnouncement] = useState<SiteContent | null>(null)
 
@@ -112,6 +113,7 @@ export function AdminPage() {
   const [announcementActive, setAnnouncementActive] = useState(false)
   const [siteTitle, setSiteTitle] = useState(defaultPlatformSettings.siteTitle)
   const [siteSubtitle, setSiteSubtitle] = useState(defaultPlatformSettings.siteSubtitle)
+  const [imageGenerationConcurrency, setImageGenerationConcurrency] = useState(10)
 
   const [openAIEndpointName, setOpenAIEndpointName] = useState("默认节点")
   const [openAIBaseUrl, setOpenAIBaseUrl] = useState("https://api.openai.com")
@@ -168,7 +170,7 @@ export function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [statsResponse, usersResponse, pricingResponse, codesResponse, openAIResponse, epayResponse, platformResponse, docsResponse, announcementResponse] = await Promise.all([
+      const [statsResponse, usersResponse, pricingResponse, codesResponse, openAIResponse, epayResponse, platformResponse, generationResponse, docsResponse, announcementResponse] = await Promise.all([
         api.get<AdminOverview>("/api/admin/stats/overview"),
         api.get<{ data: User[] }>("/api/admin/users?limit=100"),
         api.get<{ data: PricingRule[] }>("/api/admin/pricing"),
@@ -176,6 +178,7 @@ export function AdminPage() {
         api.get<OpenAISettings>("/api/admin/config/openai"),
         api.get<EPaySettings>("/api/admin/config/epay"),
         api.get<PlatformSettings>("/api/admin/config/platform"),
+        api.get<GenerationSettings>("/api/admin/config/generation"),
         api.get<SiteContent>("/api/admin/content/docs"),
         api.get<SiteContent>("/api/admin/content/announcement"),
       ])
@@ -201,6 +204,8 @@ export function AdminPage() {
       setSiteTitle(nextPlatform.siteTitle)
       setSiteSubtitle(nextPlatform.siteSubtitle)
       setSize((value) => (!nextPlatform.allow4k && value === "4k" ? "2k" : value))
+      setGenerationSettings(generationResponse.data)
+      setImageGenerationConcurrency(generationResponse.data.imageGenerationConcurrency || 10)
 
       setDocs(docsResponse.data)
       setDocsTitle(docsResponse.data.title || "文档")
@@ -415,6 +420,21 @@ export function AdminPage() {
       setSiteSubtitle(nextPlatform.siteSubtitle)
       emitPlatformSettingsUpdated(nextPlatform)
       toast.success("平台信息已保存")
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  async function saveGenerationSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const concurrency = Math.max(1, Math.min(100, Math.floor(Number(imageGenerationConcurrency) || 10)))
+    try {
+      const { data } = await api.put<GenerationSettings>("/api/admin/config/generation", {
+        imageGenerationConcurrency: concurrency,
+      })
+      setGenerationSettings(data)
+      setImageGenerationConcurrency(data.imageGenerationConcurrency)
+      toast.success(`生成并发已设置为 ${data.imageGenerationConcurrency}`)
     } catch (error) {
       toast.error(errorMessage(error))
     }
@@ -738,6 +758,7 @@ export function AdminPage() {
               <Badge variant="secondary">支付 {epay?.enabled ? "已启用" : "未启用"}</Badge>
               <Badge variant="secondary">规则 {pricing.length}</Badge>
               <Badge variant="secondary">最大 {platform.maxResolutionBucket.toUpperCase()}</Badge>
+              <Badge variant="secondary">并发 {generationSettings.imageGenerationConcurrency}</Badge>
               <Badge variant="secondary">兑换码 {codes.length}</Badge>
               <Badge variant="secondary">用户 {users.length}</Badge>
             </CardContent>
@@ -762,6 +783,34 @@ export function AdminPage() {
                     保存
                   </Button>
                 </div>
+              </form>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>生成队列</CardTitle>
+              <CardDescription>控制后台同时请求生成图片的数量，超出的任务会留在队列等待。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="flex flex-col gap-4 md:flex-row md:items-end" onSubmit={saveGenerationSettings}>
+                <FieldGroup className="md:max-w-xs">
+                  <Field>
+                    <FieldLabel htmlFor="image-generation-concurrency">最大并发生成数</FieldLabel>
+                    <Input
+                      id="image-generation-concurrency"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={imageGenerationConcurrency}
+                      onChange={(event) => setImageGenerationConcurrency(Number(event.target.value))}
+                    />
+                    <FieldDescription>默认 10，允许范围 1-100。</FieldDescription>
+                  </Field>
+                </FieldGroup>
+                <Button type="submit" className="w-full md:w-auto">
+                  <Save data-icon="inline-start" />
+                  保存
+                </Button>
               </form>
             </CardContent>
           </Card>

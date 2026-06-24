@@ -158,6 +158,10 @@ export type PlatformSettings = {
   siteSubtitle: string
 }
 
+export type GenerationSettings = {
+  imageGenerationConcurrency: number
+}
+
 export type PaymentOrder = {
   id: string
   userId: string

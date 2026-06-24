@@ -57,6 +57,7 @@ func NewRouter(s Services) *gin.Engine {
 
 	r.GET("/api/pricing", pricingHandler(s.Pricing))
 	r.GET("/api/settings/platform", platformSettingsHandler(s))
+	r.GET("/api/settings/epay", epaySettingsHandler(s))
 	r.GET("/api/content/docs", publicContentHandler(s.Content, "docs"))
 	r.GET("/api/content/announcement", publicContentHandler(s.Content, "announcement"))
 	r.GET("/api/content/assets/:id", contentAssetHandler(s.Content))
@@ -106,6 +107,8 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.PUT("/config/epay", updateEPayConfigHandler(s))
 	adminGroup.GET("/config/platform", platformSettingsHandler(s))
 	adminGroup.PUT("/config/platform", updatePlatformConfigHandler(s))
+	adminGroup.GET("/config/generation", generationConfigHandler(s))
+	adminGroup.PUT("/config/generation", updateGenerationConfigHandler(s))
 	adminGroup.GET("/redemption-codes", adminListCodesHandler(s.Redemptions))
 	adminGroup.POST("/redemption-codes", adminGenerateCodesHandler(s.Redemptions))
 	adminGroup.POST("/redemption-codes/bulk", adminBulkCodesHandler(s.Redemptions))
@@ -216,6 +219,17 @@ func pricingHandler(pricingSvc *pricing.Service) gin.HandlerFunc {
 func platformSettingsHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		settings, err := s.ConfigStore.PublicPlatform(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func epaySettingsHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		settings, err := s.ConfigStore.PublicEPay(c.Request.Context())
 		if err != nil {
 			Abort(c, err)
 			return
@@ -391,15 +405,15 @@ func webGenerateHandler(s Services) gin.HandlerFunc {
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			recordUsageFailure(c, s, usage.RecordInput{
-				UserID:      CurrentUserID(c),
-				Source:      "WEB",
-				Model:       req.Model,
-				Prompt:      req.Prompt,
-				Size:        req.Size,
-				Quality:     req.Quality,
-				Status:      "FAILED",
-				StatusCode:  intPtr(http.StatusBadRequest),
-				DurationMS:  durationPtr(startedAt),
+				UserID:       CurrentUserID(c),
+				Source:       "WEB",
+				Model:        req.Model,
+				Prompt:       req.Prompt,
+				Size:         req.Size,
+				Quality:      req.Quality,
+				Status:       "FAILED",
+				StatusCode:   intPtr(http.StatusBadRequest),
+				DurationMS:   durationPtr(startedAt),
 				ErrorMessage: stringPtr("invalid request body"),
 			})
 			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
@@ -414,15 +428,15 @@ func webGenerateHandler(s Services) gin.HandlerFunc {
 		})
 		if err != nil {
 			recordUsageFailure(c, s, usage.RecordInput{
-				UserID:      CurrentUserID(c),
-				Source:      "WEB",
-				Model:       req.Model,
-				Prompt:      req.Prompt,
-				Size:        req.Size,
-				Quality:     req.Quality,
-				Status:      "FAILED",
-				StatusCode:  intPtr(generationErrorStatus(err)),
-				DurationMS:  durationPtr(startedAt),
+				UserID:       CurrentUserID(c),
+				Source:       "WEB",
+				Model:        req.Model,
+				Prompt:       req.Prompt,
+				Size:         req.Size,
+				Quality:      req.Quality,
+				Status:       "FAILED",
+				StatusCode:   intPtr(generationErrorStatus(err)),
+				DurationMS:   durationPtr(startedAt),
 				ErrorMessage: stringPtr(err.Error()),
 			})
 			AbortGenerationError(c, err)
@@ -441,11 +455,11 @@ func webGenerateHandler(s Services) gin.HandlerFunc {
 func webMultipartGenerate(c *gin.Context, s Services, startedAt time.Time) {
 	if err := c.Request.ParseMultipartForm(64 << 20); err != nil {
 		recordUsageFailure(c, s, usage.RecordInput{
-			UserID:      CurrentUserID(c),
-			Source:      "WEB",
-			Status:      "FAILED",
-			StatusCode:  intPtr(http.StatusBadRequest),
-			DurationMS:  durationPtr(startedAt),
+			UserID:       CurrentUserID(c),
+			Source:       "WEB",
+			Status:       "FAILED",
+			StatusCode:   intPtr(http.StatusBadRequest),
+			DurationMS:   durationPtr(startedAt),
 			ErrorMessage: stringPtr("invalid multipart request"),
 		})
 		Abort(c, NewError(http.StatusBadRequest, "invalid multipart request", err))
@@ -462,15 +476,15 @@ func webMultipartGenerate(c *gin.Context, s Services, startedAt time.Time) {
 	})
 	if err != nil {
 		recordUsageFailure(c, s, usage.RecordInput{
-			UserID:      CurrentUserID(c),
-			Source:      "WEB",
-			Model:       c.PostForm("model"),
-			Prompt:      c.PostForm("prompt"),
-			Size:        c.PostForm("size"),
-			Quality:     c.PostForm("quality"),
-			Status:      "FAILED",
-			StatusCode:  intPtr(generationErrorStatus(err)),
-			DurationMS:  durationPtr(startedAt),
+			UserID:       CurrentUserID(c),
+			Source:       "WEB",
+			Model:        c.PostForm("model"),
+			Prompt:       c.PostForm("prompt"),
+			Size:         c.PostForm("size"),
+			Quality:      c.PostForm("quality"),
+			Status:       "FAILED",
+			StatusCode:   intPtr(generationErrorStatus(err)),
+			DurationMS:   durationPtr(startedAt),
 			ErrorMessage: stringPtr(err.Error()),
 		})
 		AbortGenerationError(c, err)
@@ -517,16 +531,16 @@ func developerGenerateHandler(s Services) gin.HandlerFunc {
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			recordUsageFailure(c, s, usage.RecordInput{
-				UserID:      CurrentUserID(c),
-				APIKeyID:    CurrentAPIKeyID(c),
-				Source:      "API",
-				Model:       req.Model,
-				Prompt:      req.Prompt,
-				Size:        req.Size,
-				Quality:     req.Quality,
-				Status:      "FAILED",
-				StatusCode:  intPtr(http.StatusBadRequest),
-				DurationMS:  durationPtr(startedAt),
+				UserID:       CurrentUserID(c),
+				APIKeyID:     CurrentAPIKeyID(c),
+				Source:       "API",
+				Model:        req.Model,
+				Prompt:       req.Prompt,
+				Size:         req.Size,
+				Quality:      req.Quality,
+				Status:       "FAILED",
+				StatusCode:   intPtr(http.StatusBadRequest),
+				DurationMS:   durationPtr(startedAt),
 				ErrorMessage: stringPtr("invalid request body"),
 			})
 			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
@@ -542,16 +556,16 @@ func developerGenerateHandler(s Services) gin.HandlerFunc {
 		})
 		if err != nil {
 			recordUsageFailure(c, s, usage.RecordInput{
-				UserID:      CurrentUserID(c),
-				APIKeyID:    CurrentAPIKeyID(c),
-				Source:      "API",
-				Model:       req.Model,
-				Prompt:      req.Prompt,
-				Size:        req.Size,
-				Quality:     req.Quality,
-				Status:      "FAILED",
-				StatusCode:  intPtr(generationErrorStatus(err)),
-				DurationMS:  durationPtr(startedAt),
+				UserID:       CurrentUserID(c),
+				APIKeyID:     CurrentAPIKeyID(c),
+				Source:       "API",
+				Model:        req.Model,
+				Prompt:       req.Prompt,
+				Size:         req.Size,
+				Quality:      req.Quality,
+				Status:       "FAILED",
+				StatusCode:   intPtr(generationErrorStatus(err)),
+				DurationMS:   durationPtr(startedAt),
 				ErrorMessage: stringPtr(err.Error()),
 			})
 			AbortGenerationError(c, err)
@@ -998,6 +1012,35 @@ func updatePlatformConfigHandler(s Services) gin.HandlerFunc {
 			}
 		}
 		settings, err := s.ConfigStore.UpdatePlatform(c.Request.Context(), bucket, req.SiteTitle, req.SiteSubtitle, CurrentUserID(c))
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func generationConfigHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		settings, err := s.ConfigStore.GenerationSettings(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func updateGenerationConfigHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			ImageGenerationConcurrency int `json:"imageGenerationConcurrency"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		settings, err := s.ConfigStore.UpdateGenerationSettings(c.Request.Context(), req.ImageGenerationConcurrency, CurrentUserID(c))
 		if err != nil {
 			Abort(c, err)
 			return
