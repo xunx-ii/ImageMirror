@@ -22,7 +22,8 @@ COPY --from=builder /out/image-mirror-seed /usr/local/bin/image-mirror-seed
 COPY db/migrations ./db/migrations
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh \
   && mkdir -p /data/images
 
 EXPOSE 8080
