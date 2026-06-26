@@ -1153,6 +1153,10 @@ export function AdminPage() {
                     <Trash2 data-icon="inline-start" />
                     删除日志
                   </Button>
+                  <Button variant="outline" onClick={() => void loadUsageLogs()} disabled={usageLoading}>
+                    <RefreshCw data-icon="inline-start" />
+                    刷新
+                  </Button>
                 </div>
               </div>
             </CardHeader>
