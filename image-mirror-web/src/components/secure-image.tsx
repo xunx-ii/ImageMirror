@@ -7,10 +7,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 type SecureImageProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "alt" | "src"> & {
   imageId: string
   alt: string
-  maxEdge?: 512 | 1024 | 1536
+  maxEdge?: 256 | 512 | 768
 }
 
-export function SecureImage({ imageId, alt, maxEdge = 1024, className, style, loading = "lazy", decoding = "async", ...props }: SecureImageProps) {
+export function SecureImage({ imageId, alt, maxEdge = 512, className, style, loading = "lazy", decoding = "async", ...props }: SecureImageProps) {
   const placeholderRef = useRef<HTMLDivElement | null>(null)
   const [visibleState, setVisibleState] = useState({ imageId: "", visible: false })
   const [state, setState] = useState<{

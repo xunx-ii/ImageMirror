@@ -90,10 +90,10 @@ func (s *Service) SetUsageService(usageSvc *usage.Service) {
 const (
 	maxReferenceImages     = 4
 	maxReferenceImageBytes = 20 << 20
-	DefaultPreviewMaxEdge  = 1024
+	DefaultPreviewMaxEdge  = 512
 )
 
-var previewMaxEdges = []int{512, 1024, 1536}
+var previewMaxEdges = []int{256, 512, 768}
 
 func (s *Service) CreatePending(ctx context.Context, req CreateRequest) (Generation, error) {
 	req = normalize(req, s.cfg.DefaultImageModel)
@@ -220,6 +220,9 @@ func (s *Service) Process(ctx context.Context, imageID string) error {
 	}
 	if processingTag.RowsAffected() == 0 {
 		return nil
+	}
+	if s.usage != nil {
+		_ = s.usage.MarkProcessingByImageID(ctx, gen.ID)
 	}
 
 	references := make([]openai.ReferenceImage, 0, len(gen.ReferenceKeys))
@@ -747,7 +750,7 @@ func createPreview(data []byte, maxEdge int) ([]byte, error) {
 	dst := resizeToOpaqueRGBA(src, nextWidth, nextHeight)
 
 	var out bytes.Buffer
-	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 82}); err != nil {
+	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 64}); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil

@@ -131,6 +131,7 @@ export type OpenAIEndpoint = {
   hasApiKey: boolean
   enabled: boolean
   schedulable: boolean
+  supportsStreaming: boolean
   priority: number
   failureCount: number
   circuitOpenUntil?: string

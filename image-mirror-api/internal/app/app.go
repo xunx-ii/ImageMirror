@@ -82,10 +82,11 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 			out := make([]openai.Endpoint, 0, len(credentials))
 			for _, credential := range credentials {
 				out = append(out, openai.Endpoint{
-					ID:      credential.ID,
-					Name:    credential.Name,
-					APIKey:  credential.APIKey,
-					BaseURL: credential.BaseURL,
+					ID:                credential.ID,
+					Name:              credential.Name,
+					APIKey:            credential.APIKey,
+					BaseURL:           credential.BaseURL,
+					SupportsStreaming: credential.SupportsStreaming,
 				})
 			}
 			return out, nil

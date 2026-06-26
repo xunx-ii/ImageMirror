@@ -16,43 +16,46 @@ const (
 )
 
 type OpenAIEndpoint struct {
-	ID               string     `json:"id"`
-	Name             string     `json:"name"`
-	BaseURL          string     `json:"baseUrl"`
-	APIKey           string     `json:"apiKey,omitempty"`
-	HasAPIKey        bool       `json:"hasApiKey"`
-	Enabled          bool       `json:"enabled"`
-	Schedulable      bool       `json:"schedulable"`
-	Priority         int        `json:"priority"`
-	FailureCount     int        `json:"failureCount"`
-	CircuitOpenUntil *time.Time `json:"circuitOpenUntil,omitempty"`
-	LastError        *string    `json:"lastError,omitempty"`
-	LastUsedAt       *time.Time `json:"lastUsedAt,omitempty"`
-	LastSuccessAt    *time.Time `json:"lastSuccessAt,omitempty"`
-	LastFailureAt    *time.Time `json:"lastFailureAt,omitempty"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	BaseURL           string     `json:"baseUrl"`
+	APIKey            string     `json:"apiKey,omitempty"`
+	HasAPIKey         bool       `json:"hasApiKey"`
+	Enabled           bool       `json:"enabled"`
+	Schedulable       bool       `json:"schedulable"`
+	SupportsStreaming bool       `json:"supportsStreaming"`
+	Priority          int        `json:"priority"`
+	FailureCount      int        `json:"failureCount"`
+	CircuitOpenUntil  *time.Time `json:"circuitOpenUntil,omitempty"`
+	LastError         *string    `json:"lastError,omitempty"`
+	LastUsedAt        *time.Time `json:"lastUsedAt,omitempty"`
+	LastSuccessAt     *time.Time `json:"lastSuccessAt,omitempty"`
+	LastFailureAt     *time.Time `json:"lastFailureAt,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 type OpenAIEndpointInput struct {
-	Name        string
-	BaseURL     string
-	APIKey      *string
-	Enabled     bool
-	Schedulable bool
-	Priority    int
+	Name              string
+	BaseURL           string
+	APIKey            *string
+	Enabled           bool
+	Schedulable       bool
+	SupportsStreaming bool
+	Priority          int
 }
 
 type OpenAIEndpointCredential struct {
-	ID      string
-	Name    string
-	BaseURL string
-	APIKey  string
+	ID                string
+	Name              string
+	BaseURL           string
+	APIKey            string
+	SupportsStreaming bool
 }
 
 func (s *Service) ListOpenAIEndpoints(ctx context.Context) ([]OpenAIEndpoint, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, name, base_url, api_key <> '', enabled, schedulable, priority, failure_count,
+		SELECT id, name, base_url, api_key <> '', enabled, schedulable, supports_streaming, priority, failure_count,
 			circuit_open_until, last_error, last_used_at, last_success_at, last_failure_at, created_at, updated_at
 		FROM openai_endpoints
 		ORDER BY priority ASC, created_at ASC
@@ -82,11 +85,11 @@ func (s *Service) CreateOpenAIEndpoint(ctx context.Context, input OpenAIEndpoint
 		updatedByPtr = &updatedBy
 	}
 	row := s.db.QueryRow(ctx, `
-		INSERT INTO openai_endpoints(name, base_url, api_key, enabled, schedulable, priority, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, name, base_url, api_key <> '', enabled, schedulable, priority, failure_count,
+		INSERT INTO openai_endpoints(name, base_url, api_key, enabled, schedulable, supports_streaming, priority, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, name, base_url, api_key <> '', enabled, schedulable, supports_streaming, priority, failure_count,
 			circuit_open_until, last_error, last_used_at, last_success_at, last_failure_at, created_at, updated_at
-	`, normalized.Name, normalized.BaseURL, strings.TrimSpace(*normalized.APIKey), normalized.Enabled, normalized.Schedulable, normalized.Priority, updatedByPtr)
+	`, normalized.Name, normalized.BaseURL, strings.TrimSpace(*normalized.APIKey), normalized.Enabled, normalized.Schedulable, normalized.SupportsStreaming, normalized.Priority, updatedByPtr)
 	return scanOpenAIEndpoint(row)
 }
 
@@ -114,13 +117,14 @@ func (s *Service) UpdateOpenAIEndpoint(ctx context.Context, id string, input Ope
 			api_key=CASE WHEN $4 <> '' THEN $4 ELSE api_key END,
 			enabled=$5,
 			schedulable=$6,
-			priority=$7,
-			updated_by=$8,
+			supports_streaming=$7,
+			priority=$8,
+			updated_by=$9,
 			updated_at=now()
 		WHERE id=$1
-		RETURNING id, name, base_url, api_key <> '', enabled, schedulable, priority, failure_count,
+		RETURNING id, name, base_url, api_key <> '', enabled, schedulable, supports_streaming, priority, failure_count,
 			circuit_open_until, last_error, last_used_at, last_success_at, last_failure_at, created_at, updated_at
-	`, id, normalized.Name, normalized.BaseURL, apiKey, normalized.Enabled, normalized.Schedulable, normalized.Priority, updatedByPtr)
+	`, id, normalized.Name, normalized.BaseURL, apiKey, normalized.Enabled, normalized.Schedulable, normalized.SupportsStreaming, normalized.Priority, updatedByPtr)
 	return scanOpenAIEndpoint(row)
 }
 
@@ -140,7 +144,7 @@ func (s *Service) ResetOpenAIEndpointCircuit(ctx context.Context, id string) (Op
 		UPDATE openai_endpoints
 		SET failure_count=0, circuit_open_until=NULL, last_error=NULL, updated_at=now()
 		WHERE id=$1
-		RETURNING id, name, base_url, api_key <> '', enabled, schedulable, priority, failure_count,
+		RETURNING id, name, base_url, api_key <> '', enabled, schedulable, supports_streaming, priority, failure_count,
 			circuit_open_until, last_error, last_used_at, last_success_at, last_failure_at, created_at, updated_at
 	`, strings.TrimSpace(id))
 	return scanOpenAIEndpoint(row)
@@ -152,7 +156,7 @@ func (s *Service) OpenAIEndpointCandidates(ctx context.Context, fallbackAPIKey s
 		return nil, err
 	}
 	rows, err := s.db.Query(ctx, `
-		SELECT id, name, base_url, api_key
+		SELECT id, name, base_url, api_key, supports_streaming
 		FROM openai_endpoints
 		WHERE enabled=true
 			AND schedulable=true
@@ -167,7 +171,7 @@ func (s *Service) OpenAIEndpointCandidates(ctx context.Context, fallbackAPIKey s
 	items := make([]OpenAIEndpointCredential, 0)
 	for rows.Next() {
 		var item OpenAIEndpointCredential
-		if err := rows.Scan(&item.ID, &item.Name, &item.BaseURL, &item.APIKey); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.BaseURL, &item.APIKey, &item.SupportsStreaming); err != nil {
 			return nil, err
 		}
 		item.BaseURL = normalizeOpenAIBaseURL(item.BaseURL)
@@ -188,9 +192,10 @@ func (s *Service) OpenAIEndpointCandidates(ctx context.Context, fallbackAPIKey s
 		return nil, nil
 	}
 	return []OpenAIEndpointCredential{{
-		Name:    "环境变量",
-		BaseURL: normalizeOpenAIBaseURL(fallbackBaseURL),
-		APIKey:  fallbackAPIKey,
+		Name:              "环境变量",
+		BaseURL:           normalizeOpenAIBaseURL(fallbackBaseURL),
+		APIKey:            fallbackAPIKey,
+		SupportsStreaming: true,
 	}}, nil
 }
 
@@ -269,6 +274,7 @@ func scanOpenAIEndpoint(row pgx.Row) (OpenAIEndpoint, error) {
 		&item.HasAPIKey,
 		&item.Enabled,
 		&item.Schedulable,
+		&item.SupportsStreaming,
 		&item.Priority,
 		&item.FailureCount,
 		&item.CircuitOpenUntil,

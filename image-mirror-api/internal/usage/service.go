@@ -164,6 +164,20 @@ func (s *Service) CompleteByImageID(ctx context.Context, input CompleteInput) er
 	return err
 }
 
+func (s *Service) MarkProcessingByImageID(ctx context.Context, imageGenerationID string) error {
+	imageGenerationID = strings.TrimSpace(imageGenerationID)
+	if imageGenerationID == "" {
+		return errors.New("image generation id is required")
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE usage_logs
+		SET status='PROCESSING',
+			updated_at=now()
+		WHERE image_generation_id=$1 AND status='PENDING'
+	`, imageGenerationID)
+	return err
+}
+
 func (s *Service) SetReferenceCount(ctx context.Context, imageGenerationID string, count int) error {
 	imageGenerationID = strings.TrimSpace(imageGenerationID)
 	if imageGenerationID == "" {

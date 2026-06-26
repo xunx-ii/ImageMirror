@@ -558,7 +558,7 @@ export function GeneratePage() {
                               <SecureImage
                                 imageId={image.id}
                                 alt={image.prompt}
-                                maxEdge={1024}
+                                maxEdge={512}
                                 className="max-h-[52vh] w-full object-contain transition-transform duration-200 group-hover:scale-[1.01]"
                                 onLoad={() => scrollMessagesToBottom()}
                               />

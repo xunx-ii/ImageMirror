@@ -397,12 +397,13 @@ func (s *Service) UpdateOpenAI(ctx context.Context, baseURL string, apiKey *stri
 		return OpenAISettings{}, err
 	}
 	input := OpenAIEndpointInput{
-		Name:        "默认节点",
-		BaseURL:     baseURL,
-		APIKey:      apiKey,
-		Enabled:     true,
-		Schedulable: true,
-		Priority:    100,
+		Name:              "默认节点",
+		BaseURL:           baseURL,
+		APIKey:            apiKey,
+		Enabled:           true,
+		Schedulable:       true,
+		SupportsStreaming: true,
+		Priority:          100,
 	}
 	if len(endpoints) == 0 {
 		if apiKey == nil || strings.TrimSpace(*apiKey) == "" {
@@ -417,6 +418,7 @@ func (s *Service) UpdateOpenAI(ctx context.Context, baseURL string, apiKey *stri
 	input.Name = first.Name
 	input.Enabled = first.Enabled
 	input.Schedulable = first.Schedulable
+	input.SupportsStreaming = first.SupportsStreaming
 	input.Priority = first.Priority
 	if _, err := s.UpdateOpenAIEndpoint(ctx, first.ID, input, updatedBy); err != nil {
 		return OpenAISettings{}, err

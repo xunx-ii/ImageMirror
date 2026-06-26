@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -25,10 +26,11 @@ type Client struct {
 type EndpointProvider func(ctx context.Context) ([]Endpoint, error)
 
 type Endpoint struct {
-	ID      string
-	Name    string
-	APIKey  string
-	BaseURL string
+	ID                string
+	Name              string
+	APIKey            string
+	BaseURL           string
+	SupportsStreaming bool
 }
 
 type EndpointReporter struct {
@@ -38,11 +40,13 @@ type EndpointReporter struct {
 }
 
 type ImageRequest struct {
-	Model   string `json:"model"`
-	Prompt  string `json:"prompt"`
-	Size    string `json:"size,omitempty"`
-	Quality string `json:"quality,omitempty"`
-	N       int    `json:"n,omitempty"`
+	Model         string `json:"model"`
+	Prompt        string `json:"prompt"`
+	Size          string `json:"size,omitempty"`
+	Quality       string `json:"quality,omitempty"`
+	N             int    `json:"n,omitempty"`
+	Stream        bool   `json:"stream,omitempty"`
+	PartialImages int    `json:"partial_images,omitempty"`
 }
 
 type ReferenceImage struct {
@@ -56,6 +60,16 @@ type imageResponse struct {
 		URL     string `json:"url"`
 	} `json:"data"`
 	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
+}
+
+type imageStreamEvent struct {
+	Type    string `json:"type"`
+	B64JSON string `json:"b64_json"`
+	URL     string `json:"url"`
+	Error   *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
@@ -113,11 +127,16 @@ func (c *Client) GenerateImage(ctx context.Context, req ImageRequest, references
 			c.reportAttempt(ctx, endpoint.ID)
 		}
 
+		stream := endpoint.SupportsStreaming
+		request := req
+		request.Stream = stream
+		request.PartialImages = 0
+
 		var data []byte
 		if len(references) > 0 {
-			data, err = c.editImage(ctx, endpoint.BaseURL, endpoint.APIKey, req, references)
+			data, err = c.editImage(ctx, endpoint.BaseURL, endpoint.APIKey, request, references)
 		} else {
-			data, err = c.generateImage(ctx, endpoint.BaseURL, endpoint.APIKey, req)
+			data, err = c.generateImage(ctx, endpoint.BaseURL, endpoint.APIKey, request)
 		}
 		if err == nil {
 			if c.reportSuccess != nil {
@@ -150,6 +169,9 @@ func (c *Client) generateImage(ctx context.Context, baseURL string, apiKey strin
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
+	if req.Stream {
+		return c.doImageStreamRequest(ctx, httpReq)
+	}
 	return c.doImageRequest(ctx, httpReq)
 }
 
@@ -171,6 +193,10 @@ func (c *Client) editImage(ctx context.Context, baseURL string, apiKey string, r
 	}
 	if req.Quality != "" {
 		fields["quality"] = req.Quality
+	}
+	if req.Stream {
+		fields["stream"] = "true"
+		fields["partial_images"] = fmt.Sprintf("%d", req.PartialImages)
 	}
 	for key, value := range fields {
 		if err := writer.WriteField(key, value); err != nil {
@@ -199,6 +225,9 @@ func (c *Client) editImage(ctx context.Context, baseURL string, apiKey string, r
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
+	if req.Stream {
+		return c.doImageStreamRequest(ctx, httpReq)
+	}
 	return c.doImageRequest(ctx, httpReq)
 }
 
@@ -219,6 +248,37 @@ func (c *Client) doImageRequest(ctx context.Context, httpReq *http.Request) ([]b
 	if !looksLikeJSON(payload) {
 		return nil, APIError{StatusCode: http.StatusBadGateway, Message: nonJSONResponseMessage(payload, resp.Header.Get("Content-Type")), Retryable: true}
 	}
+	return c.decodeImagePayload(ctx, payload)
+}
+
+func (c *Client) doImageStreamRequest(ctx context.Context, httpReq *http.Request) ([]byte, error) {
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		payload, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, readErr
+		}
+		message, retryable := openAIErrorMessage(payload, resp.Header.Get("Content-Type"))
+		return nil, APIError{StatusCode: resp.StatusCode, Message: message, Retryable: retryable}
+	}
+	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		payload, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if !looksLikeJSON(payload) {
+			return nil, APIError{StatusCode: http.StatusBadGateway, Message: nonJSONResponseMessage(payload, resp.Header.Get("Content-Type")), Retryable: true}
+		}
+		return c.decodeImagePayload(ctx, payload)
+	}
+	return c.decodeImageStream(ctx, resp.Body)
+}
+
+func (c *Client) decodeImagePayload(ctx context.Context, payload []byte) ([]byte, error) {
 	var decoded imageResponse
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return nil, APIError{StatusCode: http.StatusBadGateway, Message: "image API returned invalid JSON: " + responseSnippet(payload), Retryable: true}
@@ -233,6 +293,88 @@ func (c *Client) doImageRequest(ctx context.Context, httpReq *http.Request) ([]b
 		return c.download(ctx, decoded.Data[0].URL)
 	}
 	return nil, errors.New("openai image response missing b64_json")
+}
+
+func (c *Client) decodeImageStream(ctx context.Context, stream io.Reader) ([]byte, error) {
+	reader := bufio.NewReader(stream)
+	var dataLines []string
+	var lastImage []byte
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			if errors.Is(err, io.EOF) {
+				if len(lastImage) > 0 {
+					return lastImage, nil
+				}
+				return nil, errors.New("openai image stream ended without image data")
+			}
+			return nil, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if len(dataLines) > 0 {
+				image, done, err := c.decodeImageStreamEvent(ctx, strings.Join(dataLines, "\n"))
+				dataLines = dataLines[:0]
+				if err != nil {
+					return nil, err
+				}
+				if len(image) > 0 {
+					lastImage = image
+				}
+				if done && len(lastImage) > 0 {
+					return lastImage, nil
+				}
+			}
+		} else if strings.HasPrefix(line, "data:") {
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				if len(lastImage) > 0 {
+					return lastImage, nil
+				}
+				return nil, errors.New("openai image stream finished without image data")
+			}
+			dataLines = append(dataLines, data)
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if len(lastImage) > 0 {
+					return lastImage, nil
+				}
+				return nil, errors.New("openai image stream ended without image data")
+			}
+			return nil, err
+		}
+	}
+}
+
+func (c *Client) decodeImageStreamEvent(ctx context.Context, payload string) ([]byte, bool, error) {
+	if strings.TrimSpace(payload) == "" {
+		return nil, false, nil
+	}
+	var event imageStreamEvent
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return nil, false, APIError{StatusCode: http.StatusBadGateway, Message: "image stream returned invalid JSON: " + responseSnippet([]byte(payload)), Retryable: true}
+	}
+	if event.Error != nil {
+		message := strings.TrimSpace(event.Error.Message)
+		if message == "" {
+			message = "image stream returned an error"
+		}
+		return nil, false, errors.New(message)
+	}
+	done := event.Type == "image_generation.completed" || event.Type == "image_edit.completed"
+	if event.B64JSON != "" {
+		data, err := base64.StdEncoding.DecodeString(event.B64JSON)
+		if err != nil {
+			return nil, done, err
+		}
+		return data, done, nil
+	}
+	if event.URL != "" {
+		data, err := c.download(ctx, event.URL)
+		return data, done, err
+	}
+	return nil, done, nil
 }
 
 func (c *Client) download(ctx context.Context, imageURL string) ([]byte, error) {

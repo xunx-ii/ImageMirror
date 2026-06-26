@@ -195,7 +195,7 @@ export function ImageViewerDialog({ image, open, onOpenChange }: ImageViewerDial
                   <SecureImage
                     imageId={image.id}
                     alt={image.prompt}
-                    maxEdge={1536}
+                    maxEdge={768}
                     className="max-h-[70vh] max-w-full rounded-md object-contain will-change-transform"
                     draggable={false}
                     loading="eager"

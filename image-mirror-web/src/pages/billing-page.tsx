@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import type { FormEvent } from "react"
-import { BadgeCent, ExternalLink, Gift, RefreshCw } from "lucide-react"
+import { BadgeCent, ExternalLink, Gift } from "lucide-react"
 import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
@@ -97,15 +97,7 @@ export function BillingPage() {
 
   return (
     <>
-      <PageHeader
-        title="账单"
-        action={
-          <Button variant="outline" onClick={load}>
-            <RefreshCw data-icon="inline-start" />
-            刷新
-          </Button>
-        }
-      />
+      <PageHeader title="账单" />
       <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
         <div className="flex flex-col gap-4">
           {epayEnabled && (

@@ -185,7 +185,7 @@ export function GalleryPage() {
                 <CardContent className="flex flex-col gap-3 p-3">
                   <button type="button" className="relative text-left" onClick={() => openImage(image)}>
                     {image.status === "COMPLETED" ? (
-                      <SecureImage imageId={image.id} alt={image.prompt} maxEdge={512} className="aspect-square rounded-lg object-cover" />
+                      <SecureImage imageId={image.id} alt={image.prompt} maxEdge={256} className="aspect-square rounded-lg object-cover" />
                     ) : (
                       <div className="flex aspect-square items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground">
                         {image.status}
@@ -235,7 +235,7 @@ export function GalleryPage() {
           {detail && (
             <div className="flex max-h-[70vh] flex-col gap-4 overflow-auto">
               {detail.status === "COMPLETED" && (
-                <SecureImage imageId={detail.id} alt={detail.prompt} maxEdge={1536} className="max-h-[420px] w-full rounded-lg object-contain" />
+                <SecureImage imageId={detail.id} alt={detail.prompt} maxEdge={768} className="max-h-[420px] w-full rounded-lg object-contain" />
               )}
               <div className="grid gap-3 text-sm sm:grid-cols-2">
                 <DetailItem label="状态" value={detail.status} />

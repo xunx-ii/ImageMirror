@@ -1036,30 +1036,35 @@ func resetOpenAIEndpointHandler(s Services) gin.HandlerFunc {
 
 func bindOpenAIEndpointInput(c *gin.Context, requireKey bool) (systemconfig.OpenAIEndpointInput, bool) {
 	var req struct {
-		Name        string  `json:"name"`
-		BaseURL     string  `json:"baseUrl"`
-		APIKey      *string `json:"apiKey"`
-		Enabled     *bool   `json:"enabled"`
-		Schedulable *bool   `json:"schedulable"`
-		Priority    int     `json:"priority"`
+		Name              string  `json:"name"`
+		BaseURL           string  `json:"baseUrl"`
+		APIKey            *string `json:"apiKey"`
+		Enabled           *bool   `json:"enabled"`
+		Schedulable       *bool   `json:"schedulable"`
+		SupportsStreaming *bool   `json:"supportsStreaming"`
+		Priority          int     `json:"priority"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
 		return systemconfig.OpenAIEndpointInput{}, false
 	}
 	input := systemconfig.OpenAIEndpointInput{
-		Name:        req.Name,
-		BaseURL:     req.BaseURL,
-		APIKey:      req.APIKey,
-		Enabled:     true,
-		Schedulable: true,
-		Priority:    req.Priority,
+		Name:              req.Name,
+		BaseURL:           req.BaseURL,
+		APIKey:            req.APIKey,
+		Enabled:           true,
+		Schedulable:       true,
+		SupportsStreaming: true,
+		Priority:          req.Priority,
 	}
 	if req.Enabled != nil {
 		input.Enabled = *req.Enabled
 	}
 	if req.Schedulable != nil {
 		input.Schedulable = *req.Schedulable
+	}
+	if req.SupportsStreaming != nil {
+		input.SupportsStreaming = *req.SupportsStreaming
 	}
 	if requireKey && (req.APIKey == nil || strings.TrimSpace(*req.APIKey) == "") {
 		Abort(c, NewError(http.StatusBadRequest, "api key is required", nil))

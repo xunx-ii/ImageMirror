@@ -70,7 +70,7 @@ function usageStatusMeta(log: UsageLog) {
     case "PENDING":
       return { label: "排队中", variant: "outline" as const }
     case "PROCESSING":
-      return { label: "处理中", variant: "outline" as const }
+      return { label: "生成中", variant: "outline" as const }
     case "COMPLETED":
       return { label: "成功", variant: "secondary" as const }
     case "FAILED":
@@ -137,6 +137,7 @@ export function AdminPage() {
   const [openAIKey, setOpenAIKey] = useState("")
   const [openAIEnabled, setOpenAIEnabled] = useState(true)
   const [openAISchedulable, setOpenAISchedulable] = useState(true)
+  const [openAISupportsStreaming, setOpenAISupportsStreaming] = useState(true)
   const [openAIPriority, setOpenAIPriority] = useState(100)
   const [editingOpenAIEndpointId, setEditingOpenAIEndpointId] = useState<string | null>(null)
   const [openAIEndpointDialogOpen, setOpenAIEndpointDialogOpen] = useState(false)
@@ -596,12 +597,14 @@ export function AdminPage() {
         apiKey?: string
         enabled: boolean
         schedulable: boolean
+        supportsStreaming: boolean
         priority: number
       } = {
         name: openAIEndpointName.trim(),
         baseUrl: openAIBaseUrl.trim(),
         enabled: openAIEnabled,
         schedulable: openAISchedulable,
+        supportsStreaming: openAISupportsStreaming,
         priority: openAIPriority,
       }
       if (openAIKey.trim()) {
@@ -628,6 +631,7 @@ export function AdminPage() {
     setOpenAIKey("")
     setOpenAIEnabled(endpoint.enabled)
     setOpenAISchedulable(endpoint.schedulable)
+    setOpenAISupportsStreaming(endpoint.supportsStreaming)
     setOpenAIPriority(endpoint.priority)
     setOpenAIEndpointDialogOpen(true)
   }
@@ -639,6 +643,7 @@ export function AdminPage() {
     setOpenAIKey("")
     setOpenAIEnabled(true)
     setOpenAISchedulable(true)
+    setOpenAISupportsStreaming(true)
     setOpenAIPriority(100)
   }
 
@@ -865,15 +870,7 @@ export function AdminPage() {
 
   return (
     <>
-      <PageHeader
-        title="管理"
-        action={
-          <Button variant="outline" onClick={load}>
-            <RefreshCw data-icon="inline-start" />
-            刷新
-          </Button>
-        }
-      />
+      <PageHeader title="管理" />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
         <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-5 xl:grid-cols-11">
@@ -1155,10 +1152,6 @@ export function AdminPage() {
                   <Button variant="outline" onClick={() => setUsageDeleteDialogOpen(true)}>
                     <Trash2 data-icon="inline-start" />
                     删除日志
-                  </Button>
-                  <Button variant="outline" onClick={() => void loadUsageLogs()} disabled={usageLoading}>
-                    <RefreshCw data-icon="inline-start" />
-                    刷新
                   </Button>
                 </div>
               </div>
@@ -1687,6 +1680,7 @@ export function AdminPage() {
                           <span className="truncate text-xs text-muted-foreground">{endpoint.baseUrl}</span>
                           <div className="flex flex-wrap gap-1">
                             <Badge variant={endpoint.hasApiKey ? "secondary" : "outline"}>{endpoint.hasApiKey ? "密钥已配置" : "密钥未配置"}</Badge>
+                            <Badge variant={endpoint.supportsStreaming ? "secondary" : "outline"}>{endpoint.supportsStreaming ? "流式" : "普通 HTTP"}</Badge>
                           </div>
                         </div>
                       </TableCell>
@@ -2109,6 +2103,13 @@ export function AdminPage() {
                     </SelectGroup>
                   </SelectContent>
                 </Select>
+              </Field>
+              <Field orientation="horizontal">
+                <Checkbox id="openai-supports-streaming" checked={openAISupportsStreaming} onCheckedChange={(checked) => setOpenAISupportsStreaming(checked)} />
+                <FieldContent>
+                  <FieldLabel htmlFor="openai-supports-streaming">支持流式</FieldLabel>
+                  <FieldDescription>开启后优先使用 OpenAI 图片流式接口，关闭后使用普通 HTTP 接口。</FieldDescription>
+                </FieldContent>
               </Field>
             </FieldGroup>
             <div className="flex flex-wrap items-center gap-2">
