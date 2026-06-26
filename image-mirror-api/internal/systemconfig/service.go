@@ -26,6 +26,14 @@ const (
 	KeyLoadingText    = "loading_text"
 	KeyAPIKeysEnabled = "api_keys_enabled"
 
+	KeyEmailVerificationEnabled = "email_verification_enabled"
+	KeyEmailSenderEmail         = "email_sender_email"
+	KeyEmailSenderName          = "email_sender_name"
+	KeyEmailSMTPUsername        = "email_smtp_username"
+	KeyEmailSMTPHost            = "email_smtp_host"
+	KeyEmailSMTPPort            = "email_smtp_port"
+	KeyEmailSMTPPassword        = "email_smtp_password"
+
 	KeyImageGenerationConcurrency = "image_generation_concurrency"
 	KeyDailyCheckinEnabled        = "daily_checkin_enabled"
 	KeyDailyCheckinCredits        = "daily_checkin_credits"
@@ -34,6 +42,8 @@ const (
 	MaxImageGenerationConcurrency     = 100
 	DefaultDailyCheckinCredits        = 5
 	MaxDailyCheckinCredits            = 1_000_000
+	DefaultEmailSMTPHost              = ""
+	DefaultEmailSMTPPort              = 587
 )
 
 type OpenAISettings struct {
@@ -61,6 +71,20 @@ type PlatformSettings struct {
 	SiteSubtitle        string `json:"siteSubtitle"`
 	LoadingText         string `json:"loadingText"`
 	APIKeysEnabled      bool   `json:"apiKeysEnabled"`
+}
+
+type AuthSettings struct {
+	EmailVerificationEnabled bool `json:"emailVerificationEnabled"`
+}
+
+type EmailVerificationSettings struct {
+	Enabled      bool   `json:"enabled"`
+	SenderEmail  string `json:"senderEmail"`
+	SenderName   string `json:"senderName"`
+	SMTPUsername string `json:"smtpUsername"`
+	SMTPHost     string `json:"smtpHost"`
+	SMTPPort     int    `json:"smtpPort"`
+	HasPassword  bool   `json:"hasPassword"`
 }
 
 type GenerationSettings struct {
@@ -150,6 +174,115 @@ func (s *Service) APIKeysEnabled(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return !strings.EqualFold(strings.TrimSpace(value), "false"), nil
+}
+
+func (s *Service) PublicAuth(ctx context.Context) (AuthSettings, error) {
+	value, err := s.value(ctx, KeyEmailVerificationEnabled)
+	if err != nil {
+		return AuthSettings{}, err
+	}
+	return AuthSettings{EmailVerificationEnabled: parseBool(value)}, nil
+}
+
+func (s *Service) PublicEmailVerification(ctx context.Context) (EmailVerificationSettings, error) {
+	enabled, err := s.value(ctx, KeyEmailVerificationEnabled)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	senderEmail, err := s.value(ctx, KeyEmailSenderEmail)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	senderName, err := s.value(ctx, KeyEmailSenderName)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	smtpUsername, err := s.value(ctx, KeyEmailSMTPUsername)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	smtpHost, err := s.value(ctx, KeyEmailSMTPHost)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	smtpPort, err := s.value(ctx, KeyEmailSMTPPort)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	password, err := s.value(ctx, KeyEmailSMTPPassword)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	if strings.TrimSpace(password) == "" {
+		password, err = s.value(ctx, "email_auth_code")
+		if err != nil {
+			return EmailVerificationSettings{}, err
+		}
+	}
+	return normalizeEmailVerification(enabled, senderEmail, senderName, smtpUsername, smtpHost, smtpPort, password), nil
+}
+
+func (s *Service) GetEmailVerificationSender(ctx context.Context) (EmailVerificationSettings, string, error) {
+	settings, err := s.PublicEmailVerification(ctx)
+	if err != nil {
+		return EmailVerificationSettings{}, "", err
+	}
+	password, err := s.value(ctx, KeyEmailSMTPPassword)
+	if err != nil {
+		return EmailVerificationSettings{}, "", err
+	}
+	if strings.TrimSpace(password) == "" {
+		password, err = s.value(ctx, "email_auth_code")
+		if err != nil {
+			return EmailVerificationSettings{}, "", err
+		}
+	}
+	return settings, strings.TrimSpace(password), nil
+}
+
+func (s *Service) UpdateEmailVerification(ctx context.Context, settings EmailVerificationSettings, password *string, updatedBy string) (EmailVerificationSettings, error) {
+	current, err := s.PublicEmailVerification(ctx)
+	if err != nil {
+		return EmailVerificationSettings{}, err
+	}
+	passwordValue := ""
+	if password != nil {
+		passwordValue = strings.TrimSpace(*password)
+	}
+	normalized := normalizeEmailVerification(strconv.FormatBool(settings.Enabled), settings.SenderEmail, settings.SenderName, settings.SMTPUsername, settings.SMTPHost, strconv.Itoa(settings.SMTPPort), coalesceString(passwordValue, boolString(current.HasPassword)))
+	if normalized.Enabled {
+		if !isEmail(normalized.SenderEmail) {
+			return EmailVerificationSettings{}, errors.New("发信邮箱格式无效")
+		}
+		if strings.TrimSpace(normalized.SMTPUsername) == "" {
+			return EmailVerificationSettings{}, errors.New("请填写 SMTP 用户名")
+		}
+		if strings.TrimSpace(normalized.SMTPHost) == "" {
+			return EmailVerificationSettings{}, errors.New("请填写 SMTP 服务器")
+		}
+		if !current.HasPassword && passwordValue == "" {
+			return EmailVerificationSettings{}, errors.New("启用邮箱验证前请填写 SMTP 密码")
+		}
+	}
+	values := map[string]string{
+		KeyEmailVerificationEnabled: strconv.FormatBool(normalized.Enabled),
+		KeyEmailSenderEmail:         normalized.SenderEmail,
+		KeyEmailSenderName:          normalized.SenderName,
+		KeyEmailSMTPUsername:        normalized.SMTPUsername,
+		KeyEmailSMTPHost:            normalized.SMTPHost,
+		KeyEmailSMTPPort:            strconv.Itoa(normalized.SMTPPort),
+	}
+	for key, value := range values {
+		if err := s.upsert(ctx, key, value, updatedBy); err != nil {
+			return EmailVerificationSettings{}, err
+		}
+	}
+	if password != nil && passwordValue != "" {
+		if err := s.upsert(ctx, KeyEmailSMTPPassword, passwordValue, updatedBy); err != nil {
+			return EmailVerificationSettings{}, err
+		}
+	}
+	return s.PublicEmailVerification(ctx)
 }
 
 func (s *Service) MaxResolutionBucket(ctx context.Context) (string, error) {
@@ -415,6 +548,10 @@ func parsePositiveInt(value string) (int64, bool) {
 	return parsed, err == nil && parsed > 0
 }
 
+func parseBool(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
 func normalizeImageGenerationConcurrency(value int) int {
 	if value <= 0 {
 		return DefaultImageGenerationConcurrency
@@ -433,6 +570,60 @@ func normalizeDailyCheckinCredits(value int64) int64 {
 		return MaxDailyCheckinCredits
 	}
 	return value
+}
+
+func normalizeEmailVerification(enabled string, senderEmail string, senderName string, smtpUsername string, smtpHost string, smtpPort string, password string) EmailVerificationSettings {
+	email := strings.ToLower(strings.TrimSpace(senderEmail))
+	name := strings.TrimSpace(senderName)
+	if name == "" {
+		name = "ImageMirror"
+	}
+	username := strings.TrimSpace(smtpUsername)
+	if username == "" {
+		username = email
+	}
+	host := strings.TrimSpace(smtpHost)
+	if host == "" {
+		host = DefaultEmailSMTPHost
+	}
+	port := DefaultEmailSMTPPort
+	if parsed, err := strconv.Atoi(strings.TrimSpace(smtpPort)); err == nil && parsed > 0 && parsed <= 65535 {
+		port = parsed
+	}
+	return EmailVerificationSettings{
+		Enabled:      parseBool(enabled),
+		SenderEmail:  email,
+		SenderName:   name,
+		SMTPUsername: username,
+		SMTPHost:     host,
+		SMTPPort:     port,
+		HasPassword:  strings.TrimSpace(password) != "",
+	}
+}
+
+func isEmail(email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if strings.Count(email, "@") != 1 || strings.ContainsAny(email, " \t\r\n<>") {
+		return false
+	}
+	parts := strings.Split(email, "@")
+	return parts[0] != "" && strings.Contains(parts[1], ".") && !strings.HasPrefix(parts[1], ".") && !strings.HasSuffix(parts[1], ".")
+}
+
+func boolString(value bool) string {
+	if value {
+		return "true"
+	}
+	return ""
+}
+
+func coalesceString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func normalizePlatform(maxResolutionBucket string, siteTitle string, siteSubtitle string, loadingText string, apiKeysEnabled string) PlatformSettings {

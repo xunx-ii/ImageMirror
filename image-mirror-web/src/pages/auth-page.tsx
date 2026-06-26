@@ -6,7 +6,7 @@ import { toast } from "sonner"
 
 import { api, errorMessage } from "@/api/client"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { renderMarkdown } from "@/lib/markdown"
 import { defaultPlatformSettings, mergePlatformSettings, platformDocumentTitle, platformLoadingTitle } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { PlatformSettings, SiteContent, TokenPair, User } from "@/types"
+import type { AuthSettings, PlatformSettings, SiteContent, TokenPair, User } from "@/types"
 
 type AuthPageProps = {
   mode: "login" | "register"
@@ -53,8 +53,12 @@ export function AuthPage({ mode }: AuthPageProps) {
   const setSession = useAuthStore((state) => state.setSession)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [code, setCode] = useState("")
   const [loading, setLoading] = useState(false)
+  const [sendingCode, setSendingCode] = useState(false)
+  const [codeCooldown, setCodeCooldown] = useState(0)
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
+  const [authSettings, setAuthSettings] = useState<AuthSettings>({ emailVerificationEnabled: false })
   const [legalAcceptedByMode, setLegalAcceptedByMode] = useState<Record<AuthPageProps["mode"], boolean>>({
     login: false,
     register: false,
@@ -64,6 +68,7 @@ export function AuthPage({ mode }: AuthPageProps) {
   const [privacyContent, setPrivacyContent] = useState<SiteContent>(fallbackLegalContent.privacy)
   const isLogin = mode === "login"
   const legalAccepted = legalAcceptedByMode[mode]
+  const shouldVerifyEmail = !isLogin && authSettings.emailVerificationEnabled
   const activeLegalContent = legalDialog === "terms" ? termsContent : legalDialog === "privacy" ? privacyContent : null
 
   useEffect(() => {
@@ -85,10 +90,42 @@ export function AuthPage({ mode }: AuthPageProps) {
       setTermsContent(terms)
       setPrivacyContent(privacy)
     })
+    api
+      .get<AuthSettings>("/api/settings/auth")
+      .then((response) => {
+        if (!active) return
+        setAuthSettings(response.data)
+      })
+      .catch(() => undefined)
     return () => {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (codeCooldown <= 0) return
+    const timer = window.setTimeout(() => {
+      setCodeCooldown((value) => Math.max(0, value - 1))
+    }, 1000)
+    return () => window.clearTimeout(timer)
+  }, [codeCooldown])
+
+  async function sendCode() {
+    if (!email.trim()) {
+      toast.error("请先填写邮箱")
+      return
+    }
+    setSendingCode(true)
+    try {
+      await api.post("/api/auth/register-code", { email })
+      setCodeCooldown(60)
+      toast.success("验证码已发送")
+    } catch (error) {
+      toast.error(errorMessage(error))
+    } finally {
+      setSendingCode(false)
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -100,7 +137,7 @@ export function AuthPage({ mode }: AuthPageProps) {
     try {
       const { data } = await api.post<{ user: User; tokens: TokenPair }>(
         isLogin ? "/api/auth/login" : "/api/auth/register",
-        { email, password }
+        shouldVerifyEmail ? { email, password, code } : { email, password }
       )
       setSession(data.user, data.tokens)
       toast.success(isLogin ? "登录成功" : "注册成功")
@@ -121,9 +158,6 @@ export function AuthPage({ mode }: AuthPageProps) {
               <ImagePlus />
             </div>
             <CardTitle>{isLogin ? `登录 ${platform.siteTitle}` : "创建账户"}</CardTitle>
-            <CardDescription>
-              {isLogin ? platform.siteSubtitle : "注册后可充值积分并创建 API Key"}
-            </CardDescription>
           </CardHeader>
           <CardContent>
             <form className="flex flex-col gap-5" onSubmit={submit}>
@@ -151,6 +185,25 @@ export function AuthPage({ mode }: AuthPageProps) {
                     required
                   />
                 </Field>
+                {shouldVerifyEmail && (
+                  <Field>
+                    <FieldLabel htmlFor="email-code">验证码</FieldLabel>
+                    <div className="flex gap-2">
+                      <Input
+                        id="email-code"
+                        value={code}
+                        inputMode="numeric"
+                        maxLength={6}
+                        autoComplete="one-time-code"
+                        onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                        required
+                      />
+                      <Button type="button" variant="outline" className="shrink-0" disabled={sendingCode || codeCooldown > 0} onClick={() => void sendCode()}>
+                        {sendingCode ? "发送中" : codeCooldown > 0 ? `${codeCooldown}s` : "发送验证码"}
+                      </Button>
+                    </div>
+                  </Field>
+                )}
                 <Field orientation="horizontal">
                   <Checkbox id="legal-accepted" checked={legalAccepted} onCheckedChange={(checked) => setLegalAcceptedByMode((state) => ({ ...state, [mode]: checked }))} />
                   <FieldContent>

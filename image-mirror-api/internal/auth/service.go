@@ -45,6 +45,9 @@ func (s *Service) Register(ctx context.Context, email string, password string) (
 	if email == "" || len(password) < 8 {
 		return users.User{}, TokenPair{}, errors.New("email and password are required")
 	}
+	if !strings.Contains(email, "@") {
+		return users.User{}, TokenPair{}, errors.New("invalid email")
+	}
 	hash, err := HashPassword(password)
 	if err != nil {
 		return users.User{}, TokenPair{}, err

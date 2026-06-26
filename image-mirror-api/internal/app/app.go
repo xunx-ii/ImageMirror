@@ -18,6 +18,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/config"
 	"github.com/linxunxi/image-mirror/internal/content"
 	"github.com/linxunxi/image-mirror/internal/database"
+	"github.com/linxunxi/image-mirror/internal/emailverify"
 	"github.com/linxunxi/image-mirror/internal/httpapi"
 	"github.com/linxunxi/image-mirror/internal/images"
 	"github.com/linxunxi/image-mirror/internal/openai"
@@ -99,6 +100,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 	paymentSvc := payments.NewService(db, systemConfigSvc, cfg.PublicBaseURL)
 	redemptionSvc := redemptions.NewService(db)
 	contentSvc := content.NewService(db, storageSvc)
+	emailVerifySvc := emailverify.NewService(db, systemConfigSvc, usersRepo)
 	usageSvc := usage.NewService(db)
 	checkinSvc := checkins.NewService(db, systemConfigSvc)
 	queueClient := queue.NewClient(redisOpt, cfg.OpenAITimeout+time.Minute)
@@ -116,6 +118,7 @@ func Build(ctx context.Context, cfg config.Config) (*Container, error) {
 		Payments:    paymentSvc,
 		Redemptions: redemptionSvc,
 		Content:     contentSvc,
+		EmailVerify: emailVerifySvc,
 		Usage:       usageSvc,
 		Checkins:    checkinSvc,
 		Queue:       queueClient,

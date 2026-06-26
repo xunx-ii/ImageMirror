@@ -151,6 +151,20 @@ export type EPaySettings = {
   enabled: boolean
 }
 
+export type AuthSettings = {
+  emailVerificationEnabled: boolean
+}
+
+export type EmailVerificationSettings = {
+  enabled: boolean
+  senderEmail: string
+  senderName: string
+  smtpUsername: string
+  smtpHost: string
+  smtpPort: number
+  hasPassword: boolean
+}
+
 export type PlatformSettings = {
   maxResolutionBucket: "2k" | "4k"
   allow4k: boolean

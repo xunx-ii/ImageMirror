@@ -18,6 +18,7 @@ import (
 	"github.com/linxunxi/image-mirror/internal/checkins"
 	"github.com/linxunxi/image-mirror/internal/config"
 	"github.com/linxunxi/image-mirror/internal/content"
+	"github.com/linxunxi/image-mirror/internal/emailverify"
 	"github.com/linxunxi/image-mirror/internal/images"
 	"github.com/linxunxi/image-mirror/internal/payments"
 	"github.com/linxunxi/image-mirror/internal/pricing"
@@ -39,6 +40,7 @@ type Services struct {
 	Payments    *payments.Service
 	Redemptions *redemptions.Service
 	Content     *content.Service
+	EmailVerify *emailverify.Service
 	Usage       *usage.Service
 	Checkins    *checkins.Service
 	Queue       *queue.Client
@@ -59,6 +61,7 @@ func NewRouter(s Services) *gin.Engine {
 
 	r.GET("/api/pricing", pricingHandler(s.Pricing))
 	r.GET("/api/settings/platform", platformSettingsHandler(s))
+	r.GET("/api/settings/auth", authSettingsHandler(s))
 	r.GET("/api/settings/epay", epaySettingsHandler(s))
 	r.GET("/api/content/docs", publicContentHandler(s.Content, "docs"))
 	r.GET("/api/content/announcement", publicContentHandler(s.Content, "announcement"))
@@ -67,7 +70,8 @@ func NewRouter(s Services) *gin.Engine {
 	r.GET("/api/content/assets/:id", contentAssetHandler(s.Content))
 
 	api := r.Group("/api")
-	api.POST("/auth/register", registerHandler(s.Auth))
+	api.POST("/auth/register-code", sendRegisterCodeHandler(s))
+	api.POST("/auth/register", registerHandler(s))
 	api.POST("/auth/login", loginHandler(s.Auth))
 	api.POST("/auth/refresh", refreshHandler(s.Auth))
 
@@ -115,6 +119,8 @@ func NewRouter(s Services) *gin.Engine {
 	adminGroup.PUT("/config/epay", updateEPayConfigHandler(s))
 	adminGroup.GET("/config/platform", platformSettingsHandler(s))
 	adminGroup.PUT("/config/platform", updatePlatformConfigHandler(s))
+	adminGroup.GET("/config/email-verification", emailVerificationConfigHandler(s))
+	adminGroup.PUT("/config/email-verification", updateEmailVerificationConfigHandler(s))
 	adminGroup.GET("/config/generation", generationConfigHandler(s))
 	adminGroup.PUT("/config/generation", updateGenerationConfigHandler(s))
 	adminGroup.GET("/config/checkin", checkinConfigHandler(s))
@@ -149,23 +155,68 @@ func NewRouter(s Services) *gin.Engine {
 	return r
 }
 
-func registerHandler(authSvc *auth.Service) gin.HandlerFunc {
+func sendRegisterCodeHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
+			Email string `json:"email"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
 			return
 		}
-		user, tokens, err := authSvc.Register(c.Request.Context(), req.Email, req.Password)
+		if err := s.EmailVerify.SendRegistrationCode(c.Request.Context(), req.Email); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+			return
+		}
+		OK(c, gin.H{"ok": true})
+	}
+}
+
+func registerHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+			Code     string `json:"code"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		authSettings, err := s.ConfigStore.PublicAuth(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		if strings.TrimSpace(req.Email) == "" || len(req.Password) < 8 {
+			Abort(c, NewError(http.StatusBadRequest, "email and password are required", nil))
+			return
+		}
+		if !isQQRegistrationEmail(req.Email) {
+			Abort(c, NewError(http.StatusBadRequest, "仅支持 QQ 邮箱注册", nil))
+			return
+		}
+		if authSettings.EmailVerificationEnabled {
+			if err := s.EmailVerify.ValidateRegistrationCode(c.Request.Context(), req.Email, req.Code); err != nil {
+				Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
+				return
+			}
+		}
+		user, tokens, err := s.Auth.Register(c.Request.Context(), req.Email, req.Password)
 		if err != nil {
 			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
 			return
 		}
+		if authSettings.EmailVerificationEnabled {
+			_ = s.EmailVerify.ConsumeRegistrationCode(c.Request.Context(), req.Email, req.Code)
+		}
 		Created(c, gin.H{"user": user, "tokens": tokens})
 	}
+}
+
+func isQQRegistrationEmail(email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	return strings.HasSuffix(email, "@qq.com") && strings.Count(email, "@") == 1 && !strings.ContainsAny(email, " \t\r\n<>") && len(email) > len("@qq.com")
 }
 
 func loginHandler(authSvc *auth.Service) gin.HandlerFunc {
@@ -230,6 +281,17 @@ func pricingHandler(pricingSvc *pricing.Service) gin.HandlerFunc {
 func platformSettingsHandler(s Services) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		settings, err := s.ConfigStore.PublicPlatform(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func authSettingsHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		settings, err := s.ConfigStore.PublicAuth(c.Request.Context())
 		if err != nil {
 			Abort(c, err)
 			return
@@ -1071,6 +1133,48 @@ func updatePlatformConfigHandler(s Services) gin.HandlerFunc {
 		settings, err := s.ConfigStore.UpdatePlatform(c.Request.Context(), bucket, req.SiteTitle, req.SiteSubtitle, req.LoadingText, req.APIKeysEnabled, CurrentUserID(c))
 		if err != nil {
 			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func emailVerificationConfigHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		settings, err := s.ConfigStore.PublicEmailVerification(c.Request.Context())
+		if err != nil {
+			Abort(c, err)
+			return
+		}
+		OK(c, settings)
+	}
+}
+
+func updateEmailVerificationConfigHandler(s Services) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Enabled      bool    `json:"enabled"`
+			SenderEmail  string  `json:"senderEmail"`
+			SenderName   string  `json:"senderName"`
+			SMTPUsername string  `json:"smtpUsername"`
+			SMTPHost     string  `json:"smtpHost"`
+			SMTPPort     int     `json:"smtpPort"`
+			SMTPPassword *string `json:"smtpPassword"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Abort(c, NewError(http.StatusBadRequest, "invalid request body", err))
+			return
+		}
+		settings, err := s.ConfigStore.UpdateEmailVerification(c.Request.Context(), systemconfig.EmailVerificationSettings{
+			Enabled:      req.Enabled,
+			SenderEmail:  req.SenderEmail,
+			SenderName:   req.SenderName,
+			SMTPUsername: req.SMTPUsername,
+			SMTPHost:     req.SMTPHost,
+			SMTPPort:     req.SMTPPort,
+		}, req.SMTPPassword, CurrentUserID(c))
+		if err != nil {
+			Abort(c, NewError(http.StatusBadRequest, err.Error(), err))
 			return
 		}
 		OK(c, settings)

@@ -44,7 +44,7 @@ import { resolutionBuckets } from "@/lib/image-size"
 import { renderMarkdown } from "@/lib/markdown"
 import { defaultPlatformSettings, emitPlatformSettingsUpdated, mergePlatformSettings } from "@/lib/platform"
 import { useAuthStore } from "@/stores/auth"
-import type { AdminOverview, CheckinSettings, ContentAsset, EPaySettings, GenerationSettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
+import type { AdminOverview, CheckinSettings, ContentAsset, EPaySettings, EmailVerificationSettings, GenerationSettings, OpenAIEndpoint, OpenAISettings, PlatformSettings, PricingRule, RedemptionCode, SiteContent, UsageLog, UsageLogList, UsageRetention, User } from "@/types"
 
 const qualities = ["low", "medium", "high", "auto"]
 type UsageDetailKind = "prompt" | "result"
@@ -91,6 +91,7 @@ export function AdminPage() {
   const [selectedCodes, setSelectedCodes] = useState<string[]>([])
   const [openAI, setOpenAI] = useState<OpenAISettings | null>(null)
   const [epay, setEPay] = useState<EPaySettings | null>(null)
+  const [emailVerification, setEmailVerification] = useState<EmailVerificationSettings | null>(null)
   const [platform, setPlatform] = useState<PlatformSettings>(defaultPlatformSettings)
   const [generationSettings, setGenerationSettings] = useState<GenerationSettings>({ imageGenerationConcurrency: 10 })
   const [checkinSettings, setCheckinSettings] = useState<CheckinSettings>({ enabled: false, credits: 5 })
@@ -146,6 +147,13 @@ export function AdminPage() {
   const [epayName, setEPayName] = useState("ImageMirror credits")
   const [epayCreditsPerYuan, setEPayCreditsPerYuan] = useState(100)
   const [epayEnabled, setEPayEnabled] = useState(false)
+  const [emailVerificationEnabled, setEmailVerificationEnabled] = useState(false)
+  const [emailSenderEmail, setEmailSenderEmail] = useState("")
+  const [emailSenderName, setEmailSenderName] = useState("ImageMirror")
+  const [emailSMTPUsername, setEmailSMTPUsername] = useState("")
+  const [emailSMTPHost, setEmailSMTPHost] = useState("")
+  const [emailSMTPPort, setEmailSMTPPort] = useState(587)
+  const [emailSMTPPassword, setEmailSMTPPassword] = useState("")
   const [adjustments, setAdjustments] = useState<Record<string, number>>({})
   const [activeTab, setActiveTab] = useState("overview")
   const [usageLogs, setUsageLogs] = useState<UsageLog[]>([])
@@ -193,6 +201,7 @@ export function AdminPage() {
         codesResponse,
         openAIResponse,
         epayResponse,
+        emailVerificationResponse,
         platformResponse,
         generationResponse,
         checkinResponse,
@@ -207,6 +216,7 @@ export function AdminPage() {
         api.get<{ data: RedemptionCode[] }>("/api/admin/redemption-codes?limit=100"),
         api.get<OpenAISettings>("/api/admin/config/openai"),
         api.get<EPaySettings>("/api/admin/config/epay"),
+        api.get<EmailVerificationSettings>("/api/admin/config/email-verification"),
         api.get<PlatformSettings>("/api/admin/config/platform"),
         api.get<GenerationSettings>("/api/admin/config/generation"),
         api.get<CheckinSettings>("/api/admin/config/checkin"),
@@ -232,6 +242,14 @@ export function AdminPage() {
       setEPayName(epayResponse.data.name || "ImageMirror credits")
       setEPayCreditsPerYuan(epayResponse.data.creditsPerYuan || 100)
       setEPayEnabled(epayResponse.data.enabled)
+      setEmailVerification(emailVerificationResponse.data)
+      setEmailVerificationEnabled(emailVerificationResponse.data.enabled)
+      setEmailSenderEmail(emailVerificationResponse.data.senderEmail ?? "")
+      setEmailSenderName(emailVerificationResponse.data.senderName || "ImageMirror")
+      setEmailSMTPUsername(emailVerificationResponse.data.smtpUsername || emailVerificationResponse.data.senderEmail || "")
+      setEmailSMTPHost(emailVerificationResponse.data.smtpHost || "")
+      setEmailSMTPPort(emailVerificationResponse.data.smtpPort || 587)
+      setEmailSMTPPassword("")
       const nextPlatform = mergePlatformSettings(platformResponse.data)
       setPlatform(nextPlatform)
       setSiteTitle(nextPlatform.siteTitle)
@@ -526,6 +544,44 @@ export function AdminPage() {
       setCheckinCredits(data.credits)
       emitCheckinSettingsUpdated(data)
       toast.success(data.enabled ? `每日签到已启用，每次赠送 ${data.credits} credits` : "每日签到已关闭")
+    } catch (error) {
+      toast.error(errorMessage(error))
+    }
+  }
+
+  async function saveEmailVerification(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const smtpPort = Math.max(1, Math.min(65535, Math.floor(Number(emailSMTPPort) || 587)))
+    const payload: {
+      enabled: boolean
+      senderEmail: string
+      senderName: string
+      smtpUsername: string
+      smtpHost: string
+      smtpPort: number
+      smtpPassword?: string
+    } = {
+      enabled: emailVerificationEnabled,
+      senderEmail: emailSenderEmail.trim(),
+      senderName: emailSenderName.trim(),
+      smtpUsername: emailSMTPUsername.trim(),
+      smtpHost: emailSMTPHost.trim(),
+      smtpPort,
+    }
+    if (emailSMTPPassword.trim()) {
+      payload.smtpPassword = emailSMTPPassword.trim()
+    }
+    try {
+      const { data } = await api.put<EmailVerificationSettings>("/api/admin/config/email-verification", payload)
+      setEmailVerification(data)
+      setEmailVerificationEnabled(data.enabled)
+      setEmailSenderEmail(data.senderEmail)
+      setEmailSenderName(data.senderName)
+      setEmailSMTPUsername(data.smtpUsername)
+      setEmailSMTPHost(data.smtpHost)
+      setEmailSMTPPort(data.smtpPort)
+      setEmailSMTPPassword("")
+      toast.success(data.enabled ? "邮箱验证已启用" : "邮箱验证已关闭")
     } catch (error) {
       toast.error(errorMessage(error))
     }
@@ -853,6 +909,7 @@ export function AdminPage() {
               <Badge variant="secondary">最大 {platform.maxResolutionBucket.toUpperCase()}</Badge>
               <Badge variant="secondary">并发 {generationSettings.imageGenerationConcurrency}</Badge>
               <Badge variant="secondary">签到 {checkinSettings.enabled ? `${checkinSettings.credits} credits` : "未启用"}</Badge>
+              <Badge variant="secondary">邮箱验证 {emailVerification?.enabled ? "已启用" : "未启用"}</Badge>
               <Badge variant="secondary">兑换码 {codes.length}</Badge>
               <Badge variant="secondary">用户 {users.length}</Badge>
             </CardContent>
@@ -881,6 +938,55 @@ export function AdminPage() {
                     <FieldLabel htmlFor="api-keys-enabled">启用 API Key</FieldLabel>
                   </FieldContent>
                 </Field>
+                <div className="flex lg:col-span-2">
+                  <Button type="submit" className="w-full lg:w-auto">
+                    <Save data-icon="inline-start" />
+                    保存
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>邮箱验证</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form className="grid gap-4 lg:grid-cols-2" onSubmit={saveEmailVerification}>
+                <Field orientation="horizontal" className="self-end rounded-lg border p-3">
+                  <Checkbox id="email-verification-enabled" checked={emailVerificationEnabled} onCheckedChange={(checked) => setEmailVerificationEnabled(checked)} />
+                  <FieldContent>
+                    <FieldLabel htmlFor="email-verification-enabled">启用注册邮箱验证</FieldLabel>
+                  </FieldContent>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="email-sender-email">发信邮箱</FieldLabel>
+                  <Input id="email-sender-email" type="email" value={emailSenderEmail} onChange={(event) => setEmailSenderEmail(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="email-sender-name">发信名称</FieldLabel>
+                  <Input id="email-sender-name" value={emailSenderName} onChange={(event) => setEmailSenderName(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="email-smtp-username">SMTP 用户名</FieldLabel>
+                  <Input id="email-smtp-username" value={emailSMTPUsername} onChange={(event) => setEmailSMTPUsername(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="email-smtp-password">SMTP 密码</FieldLabel>
+                  <Input id="email-smtp-password" type="password" value={emailSMTPPassword} onChange={(event) => setEmailSMTPPassword(event.target.value)} placeholder={emailVerification?.hasPassword ? "留空则保持当前密码" : "输入 SMTP 密码"} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="email-smtp-host">SMTP 服务器</FieldLabel>
+                  <Input id="email-smtp-host" value={emailSMTPHost} onChange={(event) => setEmailSMTPHost(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="email-smtp-port">SMTP 端口</FieldLabel>
+                  <Input id="email-smtp-port" type="number" min={1} max={65535} value={emailSMTPPort} onChange={(event) => setEmailSMTPPort(Number(event.target.value))} />
+                </Field>
+                <div className="flex flex-wrap items-center gap-2 lg:col-span-2">
+                  <Badge variant={emailVerification?.enabled ? "secondary" : "outline"}>{emailVerification?.enabled ? "验证已启用" : "验证未启用"}</Badge>
+                  <Badge variant={emailVerification?.hasPassword ? "secondary" : "outline"}>{emailVerification?.hasPassword ? "密码已配置" : "密码未配置"}</Badge>
+                </div>
                 <div className="flex lg:col-span-2">
                   <Button type="submit" className="w-full lg:w-auto">
                     <Save data-icon="inline-start" />
